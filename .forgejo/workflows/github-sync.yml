@@ -50,6 +50,7 @@ jobs:
         env:
           MIRROR_DEPLOY_KEY: ${{ secrets.MIRROR_DEPLOY_KEY }}
           GITHUB_REMOTE: ${{ vars.MIRROR_SSH_URL }}
+          FORGEJO_TOKEN: ${{ github.token }}
         run: |
           set -eu
           umask 077
@@ -78,6 +79,12 @@ jobs:
           elif git merge-base --is-ancestor "$ours" "$theirs"; then
             echo "GitHub is ahead: fast-forwarding Forgejo"
             git push origin "$theirs:refs/heads/main"
+            # A push made by a workflow does not start other workflows, so
+            # ask for the build of what just arrived. Not fatal if refused:
+            # the next push here builds it anyway.
+            curl -fsS -m 20 -X POST -H "Authorization: token $FORGEJO_TOKEN" -H "Content-Type: application/json" \
+              -d '{"ref":"main"}' "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/dispatches" \
+              || echo "could not start the build for the new commits" >&2
           else
             echo "main has diverged: Forgejo is at $ours, GitHub at $theirs." >&2
             echo "Merge GitHub's main into Forgejo's by hand and push to Forgejo." >&2
