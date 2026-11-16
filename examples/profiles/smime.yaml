@@ -1,0 +1,9 @@
+name: S/MIME certificate
+description: Installs a person's S/MIME certificate (a .p12) for signing and encrypting mail
+platforms: [macos, ios, ipados]
+macos_channel: user
+assign:
+  # Nobody by default. List the people who have a certificate: each of them
+  # needs the secrets smime_p12 (the .p12 file, base64) and
+  # smime_p12_password set, or the profile waits as blocked for them.
+  users: []

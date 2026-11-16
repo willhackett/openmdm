@@ -1,0 +1,28 @@
+# OpenMDM configuration. Secrets can be given in the environment instead:
+# OPENMDM_MASTER_KEY, OPENMDM_OIDC_CLIENT_SECRET, OPENMDM_OPENBAO_TOKEN,
+# OPENMDM_OPENBAO_SECRET_ID.
+
+listen: ":8080"
+# What devices reach, from anywhere. Changing it means enrolling again.
+public_url: https://mdm.example.com
+# Where people open the UI, if that is a different (say, internal) name.
+admin_url: https://openmdm.example.internal
+data_dir: /data
+profiles_dir: /profiles
+organization: Example Ltd
+# openssl rand -base64 32. Seals the CA key and the APNs key in the database.
+master_key: ""
+
+oidc:
+  issuer: https://auth.example.internal/application/o/openmdm/
+  client_id: openmdm
+  client_secret: ""
+  admin_group: mdm-admins
+
+secrets:
+  backend: openbao
+  address: https://bao.example.internal
+  mount: secret
+  prefix: openmdm
+  role_id: ""
+  secret_id: ""

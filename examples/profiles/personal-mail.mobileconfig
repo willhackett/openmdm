@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadIdentifier</key>
+	<string>com.example.openmdm.personal-mail</string>
+	<key>PayloadUUID</key>
+	<string>{{ uuid "profile" }}</string>
+	<key>PayloadDisplayName</key>
+	<string>Personal mail</string>
+	<key>PayloadOrganization</key>
+	<string>{{ .Organization }}</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.mail.managed</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>com.example.openmdm.personal-mail.mail</string>
+			<key>PayloadUUID</key>
+			<string>{{ uuid "mail" }}</string>
+			<key>PayloadDisplayName</key>
+			<string>Personal</string>
+			<key>EmailAccountDescription</key>
+			<string>Personal</string>
+			<key>EmailAccountName</key>
+			<string>{{ .User.Name }}</string>
+			<key>EmailAccountType</key>
+			<string>EmailTypeIMAP</string>
+			<key>EmailAddress</key>
+			<string>{{ .User.Email }}</string>
+			<key>IncomingMailServerAuthentication</key>
+			<string>EmailAuthPassword</string>
+			<key>IncomingMailServerHostName</key>
+			<string>imap.fastmail.com</string>
+			<key>IncomingMailServerPortNumber</key>
+			<integer>993</integer>
+			<key>IncomingMailServerUseSSL</key>
+			<true/>
+			<key>IncomingMailServerUsername</key>
+			<string>{{ .User.Email }}</string>
+			<key>IncomingPassword</key>
+			<string>{{ secret "fastmail_app_password" }}</string>
+			<key>OutgoingMailServerAuthentication</key>
+			<string>EmailAuthPassword</string>
+			<key>OutgoingMailServerHostName</key>
+			<string>smtp.fastmail.com</string>
+			<key>OutgoingMailServerPortNumber</key>
+			<integer>465</integer>
+			<key>OutgoingMailServerUseSSL</key>
+			<true/>
+			<key>OutgoingMailServerUsername</key>
+			<string>{{ .User.Email }}</string>
+			<key>OutgoingPasswordSameAsIncomingPassword</key>
+			<true/>
+			<key>SMIMESigningUserOverrideable</key>
+			<true/>
+			<key>SMIMESigningCertificateUUIDUserOverrideable</key>
+			<true/>
+			<key>SMIMEEncryptionCertificateUUIDUserOverrideable</key>
+			<true/>
+			<key>SMIMEEncryptByDefaultUserOverrideable</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.caldav.account</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>com.example.openmdm.personal-mail.caldav</string>
+			<key>PayloadUUID</key>
+			<string>{{ uuid "caldav" }}</string>
+			<key>PayloadDisplayName</key>
+			<string>Personal</string>
+			<key>CalDAVAccountDescription</key>
+			<string>Personal</string>
+			<key>CalDAVHostName</key>
+			<string>caldav.fastmail.com</string>
+			<key>CalDAVPort</key>
+			<integer>443</integer>
+			<key>CalDAVUseSSL</key>
+			<true/>
+			<key>CalDAVUsername</key>
+			<string>{{ .User.Email }}</string>
+			<key>CalDAVPassword</key>
+			<string>{{ secret "fastmail_app_password" }}</string>
+		</dict>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.carddav.account</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>com.example.openmdm.personal-mail.carddav</string>
+			<key>PayloadUUID</key>
+			<string>{{ uuid "carddav" }}</string>
+			<key>PayloadDisplayName</key>
+			<string>Personal</string>
+			<key>CardDAVAccountDescription</key>
+			<string>Personal</string>
+			<key>CardDAVHostName</key>
+			<string>carddav.fastmail.com</string>
+			<key>CardDAVPort</key>
+			<integer>443</integer>
+			<key>CardDAVUseSSL</key>
+			<true/>
+			<key>CardDAVUsername</key>
+			<string>{{ .User.Email }}</string>
+			<key>CardDAVPassword</key>
+			<string>{{ secret "fastmail_app_password" }}</string>
+		</dict>
+	</array>
+</dict>
+</plist>

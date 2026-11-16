@@ -1,0 +1,7 @@
+name: Personal mail
+description: Fastmail mail, calendar and contacts for the device's owner
+platforms: [macos, ios, ipados]
+# Accounts only install on a Mac's user channel; iPhone and iPad ignore this.
+macos_channel: user
+assign:
+  everyone: true

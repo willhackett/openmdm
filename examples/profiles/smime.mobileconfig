@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadIdentifier</key>
+	<string>com.example.openmdm.smime</string>
+	<key>PayloadUUID</key>
+	<string>{{ uuid "profile" }}</string>
+	<key>PayloadDisplayName</key>
+	<string>S/MIME certificate</string>
+	<key>PayloadOrganization</key>
+	<string>{{ .Organization }}</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.security.pkcs12</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>com.example.openmdm.smime.p12</string>
+			<key>PayloadUUID</key>
+			<string>{{ uuid "p12" }}</string>
+			<key>PayloadDisplayName</key>
+			<string>S/MIME certificate</string>
+			<key>PayloadCertificateFileName</key>
+			<string>smime.p12</string>
+			<key>PayloadContent</key>
+			<data>{{ secretData "smime_p12" }}</data>
+			<key>Password</key>
+			<string>{{ secret "smime_p12_password" }}</string>
+		</dict>
+	</array>
+</dict>
+</plist>

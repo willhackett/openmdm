@@ -20,7 +20,7 @@ One Go program, one HTTP server, one data directory.
 
 `internal/core` holds the domain types and the interfaces. Every package
 under `internal/` imports `openmdm/internal/core` and **no other package of
-this module**. `cmd/openmdm/main.go` is the only place that knows the
+this module**. `internal/app` (the composition root, used by `cmd/openmdm`) is the only place that knows the
 concrete types; it builds each part and hands it the interfaces it needs.
 
 | Package | Implements | Is given |
