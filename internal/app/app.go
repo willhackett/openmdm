@@ -38,6 +38,10 @@ type Options struct {
 	SessionMiddleware func(http.Handler) http.Handler
 	// PushProviders replaces the APNs client.
 	PushProviders push.PushProviderFactory
+	// SigningURL and SigningClient replace the push certificate signing
+	// service (mdmcert.download).
+	SigningURL    string
+	SigningClient *http.Client
 }
 
 // App is the built server.
@@ -120,26 +124,29 @@ func Build(ctx context.Context, cfg core.Config, logger *slog.Logger, opts Optio
 	})
 	apiService := api.New(api.Deps{
 		Store: st, Secrets: secretStore, Renderer: renderer, Reconciler: eng, MDM: mdmService,
-		Enroller: enroller, Authority: authority, Config: cfg, Version: opts.Version,
-		Logger: logger.With("part", "api"),
+		Enroller: enroller, Authority: authority, Sealer: sealer, Config: cfg, Version: opts.Version,
+		Logger:     logger.With("part", "api"),
+		SigningURL: opts.SigningURL, SigningClient: opts.SigningClient,
 	})
 
 	mux := http.NewServeMux()
 	// What devices use; no session.
 	mux.Handle("/mdm", mdmService.Handler())
 	mux.Handle("/scep", authority.SCEPHandler())
-	mux.Handle("/enroll/", apiService.EnrollHandler())
 	mux.Handle("/healthz", apiService.HealthHandler())
 	// What people use.
 	session := opts.SessionMiddleware
 	if session == nil {
-		authn, err := auth.New(cfg.OIDC, cfg.AdminURL, st, logger.With("part", "auth"))
+		authn, err := auth.New(cfg.OIDC, externalURLs(cfg), st, logger.With("part", "auth"))
 		if err != nil {
 			return fail(fmt.Errorf("sign-in: %w", err))
 		}
 		mux.Handle("/auth/", authn.Routes())
 		session = authn.Middleware
 	}
+	// The enrolment link is a page people open: it needs a session too, so
+	// that even an invited person signs in first.
+	mux.Handle("/enroll/", session(apiService.EnrollHandler()))
 	mux.Handle("/api/", session(apiService.Handler()))
 	ui, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
@@ -165,6 +172,22 @@ func Build(ctx context.Context, cfg core.Config, logger *slog.Logger, opts Optio
 	a.Handler = securityHeaders(mux)
 	a.Secrets, a.Authority, a.MDM, a.Reconciler = secretStore, authority, mdmService, eng
 	return a, nil
+}
+
+// externalURLs are the names the server is known by: admin_url and
+// public_url, without repeats.
+func externalURLs(cfg core.Config) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, u := range []string{cfg.AdminURL, cfg.PublicURL} {
+		key := strings.ToLower(strings.TrimRight(u, "/"))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, u)
+	}
+	return out
 }
 
 // spa serves the built UI, answering index.html for any path that is not a

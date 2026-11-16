@@ -292,10 +292,22 @@ func (a *API) deleteDevice(w http.ResponseWriter, r *http.Request) {
 			a.push(r, d)
 		}
 	}
+	// Revoke the identity it enrolled with so that it cannot check in again.
+	// Best effort, like the removal: a failure is logged and the device is
+	// forgotten anyway.
+	detail := "serial " + d.SerialNumber
+	if d.CertSHA256 != "" {
+		if err := a.d.Authority.Revoke(ctx, d.CertSHA256); err != nil {
+			a.log.Error("cannot revoke the device certificate", "device", d.ID, "error", sanitize(err.Error(), a.d.Config))
+			detail += "; certificate not revoked"
+		} else {
+			detail += "; certificate revoked"
+		}
+	}
 	if err := a.d.Store.DeleteDevice(ctx, d.ID); err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	a.audit(ctx, caller(r).Username, "device.deleted", d.ID, "serial "+d.SerialNumber)
+	a.audit(ctx, caller(r).Username, "device.deleted", d.ID, detail)
 	noContent(w)
 }

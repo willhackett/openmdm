@@ -34,6 +34,8 @@ type env struct {
 	rec     *fakeReconciler
 	mdm     *fakeMDM
 	enr     *fakeEnroller
+	sealer  core.Sealer
+	signer  *fakeSigner
 	auth    *fakeAuthority
 	api     *API
 	h       http.Handler
@@ -50,7 +52,10 @@ func newEnv(t *testing.T) *env {
 		enr: &fakeEnroller{}, auth: newFakeAuthority(), logs: &bytes.Buffer{},
 		now: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC),
 	}
+	e.sealer, _ = core.NewSealer(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)))
+	e.signer = newFakeSigner(t)
 	e.api = New(Deps{
+		Sealer: e.sealer, SigningURL: e.signer.srv.URL,
 		Store: e.store, Secrets: e.secrets, Renderer: fakeRenderer{}, Reconciler: e.rec, MDM: e.mdm,
 		Enroller: e.enr, Authority: e.auth, Version: "1.2.3",
 		Config: core.Config{PublicURL: "https://mdm.example.com/", Organization: "Example", Secrets: core.SecretsConfig{Backend: "openbao", Token: "hvs.configured-token-value"}},
@@ -212,6 +217,12 @@ func routes() []route {
 		{"GET", "/api/v1/settings", nil, 200, 403},
 		{"PUT", "/api/v1/settings/push-certificate", map[string]string{"certificate_pem": "c", "key_pem": "k"}, 200, 403},
 		{"GET", "/api/v1/settings/ca.pem", nil, 200, 403},
+		{"POST", "/api/v1/settings/push-certificate/csr", nil, 200, 403},
+		{"GET", "/api/v1/settings/push-certificate/csr", nil, 404, 403},
+		{"GET", "/api/v1/settings/push-certificate/request", nil, 200, 403},
+		{"POST", "/api/v1/settings/push-certificate/request", map[string]string{"email": "a@corp.example"}, 200, 403},
+		{"POST", "/api/v1/settings/push-certificate/request/decrypt", map[string]string{"encrypted": "00"}, 400, 403},
+		{"DELETE", "/api/v1/settings/push-certificate/request", nil, 204, 403},
 		{"GET", "/api/v1/events", nil, 200, 403},
 	}
 }
@@ -501,7 +512,16 @@ func TestErase(t *testing.T) {
 func TestDeleteDevice(t *testing.T) {
 	e := newEnv(t)
 	a := asUser(alice)
+	d1 := e.store.devices["d1"]
+	d1.CertSHA256 = "feed01"
+	e.store.devices["d1"] = d1
 	e.json(a, "DELETE", "/api/v1/devices/d1", nil, 204)
+	if len(e.auth.revoked) != 1 || e.auth.revoked[0] != "feed01" {
+		t.Errorf("revoked %v", e.auth.revoked)
+	}
+	if ev := e.store.lastEvent(); !strings.Contains(ev.Detail, "certificate revoked") {
+		t.Errorf("event %+v", ev)
+	}
 	if len(e.mdm.removed) != 1 || e.mdm.removed[0] != [2]string{"d1", "openmdm.enrollment"} {
 		t.Errorf("removed %v", e.mdm.removed)
 	}
@@ -513,6 +533,10 @@ func TestDeleteDevice(t *testing.T) {
 	}
 	if ev := e.store.lastEvent(); ev.Kind != "device.deleted" || ev.Subject != "d1" {
 		t.Errorf("event %+v", ev)
+	}
+	// A device with no recorded certificate revokes nothing.
+	if len(e.auth.revoked) != 1 {
+		t.Errorf("revoked %v", e.auth.revoked)
 	}
 	// Best effort: a failing removal does not stop the delete.
 	e.mdm.removeErr = errors.New("no push token")
@@ -527,6 +551,17 @@ func TestDeleteDevice(t *testing.T) {
 		t.Error("RemoveProfile sent to a device that is not enrolled")
 	}
 	e.errMsg(a, "DELETE", "/api/v1/devices/d4", nil, 404)
+
+	// Best effort too: a failing revocation is logged and the device still forgotten.
+	e.store.devices["d3"] = core.Device{ID: "d3", Status: core.DeviceUnenrolled, CertSHA256: "bad01"}
+	e.auth.revokeErr = errors.New("store is read-only")
+	e.json(a, "DELETE", "/api/v1/devices/d3", nil, 204)
+	if _, err := e.store.GetDevice(t.Context(), "d3"); !errors.Is(err, core.ErrNotFound) {
+		t.Error("device not deleted after a failed revocation")
+	}
+	if !strings.Contains(e.logs.String(), "cannot revoke the device certificate") {
+		t.Error("revocation failure not logged")
+	}
 }
 
 // --- secrets ---
@@ -874,9 +909,18 @@ func TestListEnrollments(t *testing.T) {
 	}
 }
 
+// enrollGet opens the link as george, who the enrolments of newToken are for.
 func (e *env) enrollGet(token string) *httptest.ResponseRecorder {
+	return e.enrollGetAs(asUser(george), token)
+}
+
+func (e *env) enrollGetAs(as *core.User, token string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
-	e.api.EnrollHandler().ServeHTTP(rr, httptest.NewRequest("GET", "/enroll/"+token, nil))
+	req := httptest.NewRequest("GET", "/enroll/"+token, nil)
+	if as != nil {
+		req = req.WithContext(core.WithUser(req.Context(), *as))
+	}
+	e.api.EnrollHandler().ServeHTTP(rr, req)
 	e.record(rr)
 	return rr
 }
@@ -925,6 +969,62 @@ func TestEnrollLink(t *testing.T) {
 	}
 	if e.store.enrolls[token2].DownloadedAt != nil {
 		t.Error("an expired link was claimed")
+	}
+}
+
+func TestEnrollLinkNeedsTheRightPerson(t *testing.T) {
+	e := newEnv(t)
+	token := newToken(t, e) // for george
+
+	// Not signed in at all (the app's session middleware normally redirects first).
+	if rr := e.enrollGetAs(nil, token); rr.Code != http.StatusUnauthorized {
+		t.Errorf("no user: %d", rr.Code)
+	}
+	// Someone else: told so, in plain text, and the link is not used up.
+	rr := e.enrollGetAs(asUser(harry), token)
+	if rr.Code != http.StatusForbidden || !strings.HasPrefix(rr.Header().Get("Content-Type"), "text/plain") ||
+		!strings.Contains(rr.Body.String(), "for someone else") || strings.Contains(rr.Body.String(), "<plist>") {
+		t.Errorf("stranger: %d %q", rr.Code, rr.Body)
+	}
+	if e.store.enrolls[token].DownloadedAt != nil {
+		t.Fatal("a refused person used up the link")
+	}
+	// A stranger learns nothing about unknown or expired links beyond 404,
+	// and nothing about used ones beyond 403.
+	if rr := e.enrollGetAs(asUser(harry), "no-such-token"); rr.Code != 404 {
+		t.Errorf("unknown for stranger: %d", rr.Code)
+	}
+	// An admin may; the name is compared without regard to case.
+	token2 := newToken(t, e)
+	if rr := e.enrollGetAs(asUser(alice), token2); rr.Code != 200 {
+		t.Errorf("admin: %d", rr.Code)
+	}
+	if ev := e.store.lastEvent(); ev.Kind != "enrollment.downloaded" || ev.Actor != "alice" || ev.Subject != "george" {
+		t.Errorf("event %+v", ev)
+	}
+	token3 := newToken(t, e)
+	g := george
+	g.Username = "George"
+	if rr := e.enrollGetAs(&g, token3); rr.Code != 200 {
+		t.Errorf("same person, other case: %d", rr.Code)
+	}
+	if ev := e.store.lastEvent(); ev.Actor != "George" {
+		t.Errorf("actor %q", ev.Actor)
+	}
+	// Used: a stranger gets 403 (not 410), the person gets 410.
+	if rr := e.enrollGetAs(asUser(harry), token3); rr.Code != http.StatusForbidden {
+		t.Errorf("used, stranger: %d", rr.Code)
+	}
+	if rr := e.enrollGetAs(asUser(george), token3); rr.Code != http.StatusGone {
+		t.Errorf("used, owner: %d", rr.Code)
+	}
+	// Expired: 404 for everybody, even the owner, checked first.
+	token4 := newToken(t, e)
+	e.now = e.now.Add(2 * time.Hour)
+	for _, u := range []*core.User{asUser(harry), asUser(george), asUser(alice)} {
+		if rr := e.enrollGetAs(u, token4); rr.Code != 404 {
+			t.Errorf("expired as %s: %d", u.Username, rr.Code)
+		}
 	}
 }
 

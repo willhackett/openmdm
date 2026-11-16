@@ -118,6 +118,7 @@ func (a *fakeAuthority) CACertificate() *x509.Certificate { return a.ca.cert }
 func (a *fakeAuthority) SigningIdentity() (*x509.Certificate, crypto.Signer) {
 	return a.ca.cert, a.ca.key
 }
+func (a *fakeAuthority) Revoke(context.Context, string) error { return nil }
 func (a *fakeAuthority) VerifyIssued(_ context.Context, cert *x509.Certificate) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

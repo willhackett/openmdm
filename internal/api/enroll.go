@@ -103,6 +103,11 @@ func plain(w http.ResponseWriter, status int, msg string) {
 // yet, say) leaves the link usable.
 func (a *API) enroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	me, ok := core.UserFrom(ctx)
+	if !ok {
+		plain(w, http.StatusUnauthorized, "Sign in to open this link.")
+		return
+	}
 	token := param(r, "token")
 	e, err := a.d.Store.GetEnrollment(ctx, token)
 	if err != nil {
@@ -116,6 +121,12 @@ func (a *API) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	if !a.now().Before(e.ExpiresAt) {
 		plain(w, http.StatusNotFound, "This enrolment link is not known or has expired.")
+		return
+	}
+	// Unknown and expired are answered above, so that a signed-in stranger
+	// learns nothing more than "no such link".
+	if !isAdmin(me) && !isSelf(me, e.Username) {
+		plain(w, http.StatusForbidden, "This enrolment link is for someone else. Ask for your own.")
 		return
 	}
 	if e.DownloadedAt != nil {
@@ -141,7 +152,7 @@ func (a *API) enroll(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Something went wrong. Try again.")
 		return
 	}
-	a.audit(ctx, "system", "enrollment.downloaded", e.Username, "")
+	a.audit(ctx, me.Username, "enrollment.downloaded", e.Username, "")
 	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
 	w.Header().Set("Content-Disposition", `attachment; filename="enroll.mobileconfig"`)
 	w.Header().Set("Cache-Control", "no-store")

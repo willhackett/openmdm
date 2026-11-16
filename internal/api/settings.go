@@ -52,12 +52,31 @@ func (a *API) putPushCertificate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body, false) {
 		return
 	}
-	if body.CertificatePEM == "" || body.KeyPEM == "" {
-		badRequest(w, "certificate_pem and key_pem are both required")
+	if body.CertificatePEM == "" {
+		badRequest(w, "certificate_pem is required")
 		return
 	}
+	a.pushMu.Lock()
+	defer a.pushMu.Unlock()
 	ctx := r.Context()
-	if err := a.d.MDM.SetPushCert(ctx, []byte(body.CertificatePEM), []byte(body.KeyPEM)); err != nil {
+	_, pending, err := a.loadPending(ctx)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	keyPEM := []byte(body.KeyPEM)
+	if body.KeyPEM == "" {
+		// Only the certificate: it belongs to the key made for the request.
+		if !pending {
+			badRequest(w, "key_pem is required unless a push certificate request is pending")
+			return
+		}
+		if keyPEM, err = a.pendingPushKey(ctx); err != nil {
+			a.fail(w, r, err)
+			return
+		}
+	}
+	if err := a.d.MDM.SetPushCert(ctx, []byte(body.CertificatePEM), keyPEM); err != nil {
 		a.fail(w, r, err)
 		return
 	}
@@ -66,7 +85,16 @@ func (a *API) putPushCertificate(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.audit(ctx, caller(r).Username, "settings.push_certificate", push.Topic, "")
+	if pending {
+		if err := a.clearPending(ctx); err != nil {
+			a.log.Error("cannot clear the push certificate request", "error", err)
+		}
+	}
+	detail := ""
+	if body.KeyPEM == "" {
+		detail = "with the key of the request"
+	}
+	a.audit(ctx, caller(r).Username, "settings.push_certificate", push.Topic, detail)
 	writeJSON(w, http.StatusOK, map[string]any{"push": push})
 }
 

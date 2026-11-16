@@ -73,6 +73,10 @@ func (e *Engine) DeviceAuthenticated(ctx context.Context, c core.Checkin) {
 	}
 	if old, err := e.store.GetDevice(ctx, c.DeviceID); err == nil {
 		d.Username = old.Username
+		d.CertSHA256 = old.CertSHA256
+	}
+	if c.CertSHA256 != "" {
+		d.CertSHA256 = c.CertSHA256
 	}
 	if u, ok := e.ownerOf(ctx, c); ok {
 		d.Username = u
@@ -121,6 +125,9 @@ func (e *Engine) tokenUpdated(ctx context.Context, c core.Checkin) bool {
 		if f.v != "" {
 			*f.dst = f.v
 		}
+	}
+	if d.CertSHA256 == "" {
+		d.CertSHA256 = c.CertSHA256
 	}
 	d.LastSeenAt = now
 	was := d.Status

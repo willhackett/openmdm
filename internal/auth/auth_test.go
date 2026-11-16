@@ -94,7 +94,7 @@ type fakeIdP struct {
 	userinfoHit int
 }
 
-type codeInfo struct{ challenge, nonce string }
+type codeInfo struct{ challenge, nonce, redirect string }
 
 func newFakeIdP(t *testing.T) *fakeIdP {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -156,7 +156,7 @@ func (p *fakeIdP) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		code := "code-" + q.Get("state")
-		p.pending[code] = codeInfo{q.Get("code_challenge"), q.Get("nonce")}
+		p.pending[code] = codeInfo{q.Get("code_challenge"), q.Get("nonce"), q.Get("redirect_uri")}
 		ru, _ := url.Parse(q.Get("redirect_uri"))
 		rq := ru.Query()
 		rq.Set("code", code)
@@ -168,6 +168,10 @@ func (p *fakeIdP) serve(w http.ResponseWriter, r *http.Request) {
 		ci, ok := p.pending[r.Form.Get("code")]
 		if !ok {
 			http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
+			return
+		}
+		if r.Form.Get("redirect_uri") != ci.redirect {
+			http.Error(w, `{"error":"invalid_grant","error_description":"redirect_uri mismatch"}`, http.StatusBadRequest)
 			return
 		}
 		h := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
@@ -212,6 +216,8 @@ type env struct {
 	auth  *Auth
 	app   *httptest.Server
 	cl    *http.Client
+	// alsoLocalhost makes the server known by localhost:<port> as well.
+	alsoLocalhost bool
 }
 
 func newEnv(t *testing.T) *env {
@@ -231,9 +237,14 @@ func (e *env) start(t *testing.T, store core.Store) {
 	mux := http.NewServeMux()
 	e.app = httptest.NewServer(mux)
 	t.Cleanup(e.app.Close)
+	bases := []string{e.app.URL}
+	if e.alsoLocalhost {
+		_, port, _ := strings.Cut(strings.TrimPrefix(e.app.URL, "http://"), ":")
+		bases = append(bases, "http://localhost:"+port)
+	}
 	a, err := New(core.OIDCConfig{
 		Issuer: e.idp.srv.URL, ClientID: "mdm", ClientSecret: "s3cret", AdminGroup: "mdm-admins",
-	}, e.app.URL, store, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	}, bases, store, slog.New(slog.NewTextHandler(testWriter{t}, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,20 +345,26 @@ func TestCookieAttributes(t *testing.T) {
 	}
 	// Inspect directly using the handler.
 	rec := httptest.NewRecorder()
-	e.auth.setCookie(rec, sessionCookie, "v", "/", sessionTTL)
+	e.auth.setCookie(rec, false, sessionCookie, "v", "/", sessionTTL)
 	c := rec.Result().Cookies()[0]
 	if !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Secure {
 		t.Fatalf("cookie %+v", c)
 	}
-	e.auth.secure = true
 	rec = httptest.NewRecorder()
-	e.auth.setCookie(rec, sessionCookie, "v", "/", sessionTTL)
+	e.auth.setCookie(rec, true, sessionCookie, "v", "/", sessionTTL)
 	if !rec.Result().Cookies()[0].Secure {
 		t.Fatal("not Secure on https")
 	}
-	a2, _ := New(core.OIDCConfig{Issuer: "https://x", ClientID: "c"}, "https://mdm.example.internal/", e.store, nil)
-	if !a2.secure || a2.RedirectURI() != "https://mdm.example.internal/auth/callback" {
-		t.Fatalf("secure=%v redirect=%q", a2.secure, a2.RedirectURI())
+	a2, _ := New(core.OIDCConfig{Issuer: "https://x", ClientID: "c"}, []string{"https://mdm.example.internal/", "http://plain.example"}, e.store, nil)
+	uris := a2.RedirectURIs()
+	if len(uris) != 2 || uris[0] != "https://mdm.example.internal/auth/callback" || uris[1] != "http://plain.example/auth/callback" {
+		t.Fatalf("redirects=%q", uris)
+	}
+	if b, ok := a2.baseByHost("MDM.Example.Internal"); !ok || !b.secure {
+		t.Fatalf("base = %+v %v", b, ok)
+	}
+	if b, ok := a2.baseByHost("plain.example"); !ok || b.secure {
+		t.Fatalf("base = %+v %v", b, ok)
 	}
 }
 
@@ -624,7 +641,7 @@ func TestSessionKeysPersisted(t *testing.T) {
 	before := string(e.store.blobs[keysBlob])
 
 	// A second Auth on the same store accepts the first one's session.
-	a2, err := New(core.OIDCConfig{Issuer: e.idp.srv.URL, ClientID: "mdm"}, e.app.URL, e.store, nil)
+	a2, err := New(core.OIDCConfig{Issuer: e.idp.srv.URL, ClientID: "mdm"}, []string{e.app.URL}, e.store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -643,7 +660,7 @@ func TestSessionKeysPersisted(t *testing.T) {
 	}
 
 	// A different store means different keys: the session is refused.
-	a3, _ := New(core.OIDCConfig{Issuer: e.idp.srv.URL, ClientID: "mdm"}, e.app.URL, newFakeStoreWith(e.store.users), nil)
+	a3, _ := New(core.OIDCConfig{Issuer: e.idp.srv.URL, ClientID: "mdm"}, []string{e.app.URL}, newFakeStoreWith(e.store.users), nil)
 	rec = httptest.NewRecorder()
 	a3.Middleware(http.HandlerFunc(whoami)).ServeHTTP(rec, req)
 	if rec.Code != 302 {
@@ -659,13 +676,16 @@ func newFakeStoreWith(users map[string]core.User) *fakeStore {
 
 func TestNewValidation(t *testing.T) {
 	st := newFakeStore()
-	if _, err := New(core.OIDCConfig{ClientID: "c"}, "https://x", st, nil); err == nil {
+	if _, err := New(core.OIDCConfig{ClientID: "c"}, []string{"https://x"}, st, nil); err == nil {
 		t.Error("missing issuer accepted")
 	}
-	if _, err := New(core.OIDCConfig{Issuer: "https://i", ClientID: "c"}, "not a url", st, nil); err == nil {
+	if _, err := New(core.OIDCConfig{Issuer: "https://i", ClientID: "c"}, []string{"not a url"}, st, nil); err == nil {
 		t.Error("bad admin url accepted")
 	}
-	if _, err := New(core.OIDCConfig{Issuer: "https://i", ClientID: "c", CAFile: "/nonexistent"}, "https://x", st, nil); err == nil {
+	if _, err := New(core.OIDCConfig{Issuer: "https://i", ClientID: "c"}, nil, st, nil); err == nil {
+		t.Error("no URL accepted")
+	}
+	if _, err := New(core.OIDCConfig{Issuer: "https://i", ClientID: "c", CAFile: "/nonexistent"}, []string{"https://x"}, st, nil); err == nil {
 		t.Error("missing CA file accepted")
 	}
 }
@@ -675,4 +695,120 @@ type testWriter struct{ t *testing.T }
 func (w testWriter) Write(p []byte) (int, error) {
 	w.t.Log(strings.TrimSpace(string(p)))
 	return len(p), nil
+}
+
+// twoNames starts the app known by two names that reach the same server:
+// 127.0.0.1:port and localhost:port.
+func twoNames(t *testing.T) (e *env, ip, name string) {
+	t.Helper()
+	e = &env{idp: newFakeIdP(t), store: newFakeStore()}
+	e.idp.claims = map[string]any{"preferred_username": "alice", "groups": []string{"mdm-admins"}}
+	e.alsoLocalhost = true
+	e.start(t, e.store)
+	_, port, _ := strings.Cut(strings.TrimPrefix(e.app.URL, "http://"), ":")
+	return e, e.app.URL, "http://localhost:" + port
+}
+
+func (e *env) whoAt(t *testing.T, base string) string {
+	return body(e.get(t, base+"/open"))
+}
+
+func TestSignInOnBothNames(t *testing.T) {
+	e, ip, name := twoNames(t)
+
+	// Sign in on the first name: a session there, none on the other.
+	if r := e.get(t, ip+"/auth/login?next=/page"); r.StatusCode != 302 || r.Header.Get("Location") != "/page" {
+		t.Fatalf("login on ip: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	if got := e.whoAt(t, ip); got != "alice admin" {
+		t.Fatalf("ip: %q", got)
+	}
+	if got := e.whoAt(t, name); got != "anonymous" {
+		t.Fatalf("a session on one name is a session on the other: %q", got)
+	}
+
+	// Sign in on the second name; the identity provider must have been given
+	// that name's redirect address (the fake checks the exchange matches).
+	if r := e.get(t, name+"/auth/login?next=/page"); r.StatusCode != 302 || r.Header.Get("Location") != "/page" {
+		t.Fatalf("login on name: %d %q (%s)", r.StatusCode, r.Header.Get("Location"), "")
+	}
+	if got := e.whoAt(t, name); got != "alice admin" {
+		t.Fatalf("name: %q", got)
+	}
+}
+
+func TestRedirectURIFollowsTheHost(t *testing.T) {
+	e, ip, name := twoNames(t)
+	for _, base := range []string{ip, name} {
+		resp, err := e.cl.Get(base + "/auth/login")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		u, _ := url.Parse(resp.Header.Get("Location"))
+		if got := u.Query().Get("redirect_uri"); got != base+"/auth/callback" {
+			t.Fatalf("login on %s asked for redirect_uri %q", base, got)
+		}
+	}
+}
+
+func TestCallbackMustMatchLoginName(t *testing.T) {
+	e, ip, name := twoNames(t)
+	// Login on one name; take its flow cookie to the callback of the other.
+	resp, err := e.cl.Get(ip + "/auth/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	var flow *http.Cookie
+	ipu, _ := url.Parse(ip + "/auth/")
+	for _, c := range e.cl.Jar.Cookies(ipu) {
+		if c.Name == flowCookie {
+			flow = c
+		}
+	}
+	if flow == nil {
+		t.Fatal("no flow cookie")
+	}
+	req, _ := http.NewRequest("GET", name+"/auth/callback?code=x&state=y", nil)
+	req.AddCookie(flow)
+	r2, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d", r2.StatusCode)
+	}
+}
+
+func TestForeignHostRefused(t *testing.T) {
+	e, ip, _ := twoNames(t)
+	for _, path := range []string{"/auth/login", "/auth/callback?code=x&state=y"} {
+		req, _ := http.NewRequest("GET", ip+path, nil)
+		req.Host = "evil.example"
+		resp, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := body(resp)
+		if resp.StatusCode != http.StatusBadRequest || resp.Header.Get("Location") != "" || strings.Contains(b, "evil.example") {
+			t.Fatalf("%s: %d %q", path, resp.StatusCode, b)
+		}
+		if len(resp.Cookies()) != 0 {
+			t.Fatalf("%s set cookies", path)
+		}
+	}
+	// The host is compared without regard to case.
+	req, _ := http.NewRequest("GET", ip+"/auth/login", nil)
+	req.Host = strings.ToUpper(strings.TrimPrefix(ip, "http://"))
+	resp, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 302 {
+		t.Fatalf("upper-case host: %d", resp.StatusCode)
+	}
+	_ = e
 }

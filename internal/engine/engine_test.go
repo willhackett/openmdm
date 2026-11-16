@@ -25,7 +25,7 @@ func TestDeviceAuthenticated(t *testing.T) {
 
 	d, _ := h.st.GetDevice(h.ctx, "D1")
 	if d.Status != core.DevicePending || d.Username != "will" || d.UserChannelID != "" ||
-		d.Platform != core.PlatformMacOS || d.SerialNumber != "S" || d.EnrolledAt != h.clk.Now() {
+		d.Platform != core.PlatformMacOS || d.SerialNumber != "S" || d.EnrolledAt != h.clk.Now() || d.CertSHA256 != "abc" {
 		t.Fatalf("device = %+v", d)
 	}
 	if _, ok := h.st.row("D1", "p"); ok {
@@ -49,7 +49,7 @@ func TestDeviceAuthenticated(t *testing.T) {
 	}
 	h.e.DeviceAuthenticated(h.ctx, core.Checkin{DeviceID: "D1", CertSHA256: "unknown", Model: "iPhone15,2"})
 	d, _ = h.st.GetDevice(h.ctx, "D1")
-	if d.Username != "will" || d.Platform != core.PlatformIOS { // platform falls back to Model
+	if d.Username != "will" || d.Platform != core.PlatformIOS || d.CertSHA256 != "unknown" { // platform falls back to Model
 		t.Fatalf("D1 = %+v", d)
 	}
 }
@@ -72,14 +72,23 @@ func TestDeviceTokenUpdated(t *testing.T) {
 	if d.UserChannelID != "D1:U" || d.Status != core.DeviceEnrolled {
 		t.Fatalf("d = %+v", d)
 	}
+	// the certificate is recorded when it was not known, and not replaced when it was
+	h.e.DeviceTokenUpdated(h.ctx, core.Checkin{DeviceID: "D1", EnrollmentID: "D1", CertSHA256: "other"})
+	if d, _ = h.st.GetDevice(h.ctx, "D1"); d.CertSHA256 != "other" {
+		t.Fatalf("certificate not recorded on token update: %+v", d)
+	}
+	h.e.DeviceTokenUpdated(h.ctx, core.Checkin{DeviceID: "D1", EnrollmentID: "D1", CertSHA256: "third"})
+	if d, _ = h.st.GetDevice(h.ctx, "D1"); d.CertSHA256 != "other" {
+		t.Fatalf("certificate replaced on token update: %+v", d)
+	}
 	// audit only on the transition
 	if got := h.st.kinds(); !reflect.DeepEqual(got, []string{"device.authenticated", "device.enrolled"}) {
 		t.Fatalf("events = %v", got)
 	}
 	// lost database
-	h.e.DeviceTokenUpdated(h.ctx, core.Checkin{DeviceID: "NEW", EnrollmentID: "NEW", ProductName: "iPhone15,2", SerialNumber: "X"})
+	h.e.DeviceTokenUpdated(h.ctx, core.Checkin{DeviceID: "NEW", EnrollmentID: "NEW", ProductName: "iPhone15,2", SerialNumber: "X", CertSHA256: "newcert"})
 	n, err := h.st.GetDevice(h.ctx, "NEW")
-	if err != nil || n.Status != core.DeviceEnrolled || n.Platform != core.PlatformIOS || n.SerialNumber != "X" {
+	if err != nil || n.CertSHA256 != "newcert" || n.Status != core.DeviceEnrolled || n.Platform != core.PlatformIOS || n.SerialNumber != "X" {
 		t.Fatalf("created = %+v %v", n, err)
 	}
 }

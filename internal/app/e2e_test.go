@@ -414,10 +414,19 @@ func (e *env) newDevice(product, udid, serial string, tokenByte byte) *simDevice
 	}
 }
 
-// openLink GETs an enrolment link and returns the response.
-func (e *env) openLink(url string) (int, string, []byte) {
+// openLink GETs an enrolment link as a signed-in person ("" is nobody; the
+// test session middleware then lets the request through unsigned, which the
+// real one would send to sign in) and returns the response.
+func (e *env) openLink(as, url string) (int, string, []byte) {
 	e.t.Helper()
-	resp, err := http.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if as != "" {
+		req.Header.Set("X-Test-User", as)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -748,7 +757,7 @@ func (e *env) enrol(user, product, udid, serial string, tokenByte byte) *simDevi
 		URL string `json:"url"`
 	}
 	e.call("admin", "POST", "/api/v1/enrollments", map[string]string{"username": user}, 200, &out)
-	code, ct, body := e.openLink(out.URL)
+	code, ct, body := e.openLink(user, out.URL)
 	if code != 200 || ct != "application/x-apple-aspen-config" {
 		e.t.Fatalf("enrolment link: %d %s %s", code, ct, body)
 	}
@@ -778,7 +787,15 @@ func TestEndToEnd(t *testing.T) {
 	if !strings.HasPrefix(enr.URL, e.srv.URL+"/enroll/") {
 		t.Fatalf("link %q", enr.URL)
 	}
-	code, _, body := e.openLink(enr.URL)
+	// Only the person it is for (or an admin) may open it; a stranger, who
+	// is signed in, is told so, and the link is not used up.
+	if code, _, body := e.openLink("mallory", enr.URL); code != http.StatusForbidden || !strings.Contains(string(body), "someone else") {
+		t.Fatalf("link opened by a stranger: %d %q", code, body)
+	}
+	if code, _, _ := e.openLink("mallory", e.srv.URL+"/enroll/no-such-token"); code != http.StatusNotFound {
+		t.Fatalf("unknown link, stranger: %d", code)
+	}
+	code, _, body := e.openLink("sam", enr.URL)
 	if code != http.StatusServiceUnavailable || !strings.Contains(string(body), "push certificate") {
 		t.Fatalf("link without push certificate: %d %q", code, body)
 	}
@@ -793,7 +810,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// 2. The link works now, once.
-	code, ct, body := e.openLink(enr.URL)
+	code, ct, body := e.openLink("sam", enr.URL)
 	if code != 200 || ct != "application/x-apple-aspen-config" {
 		t.Fatalf("link: %d %s %q", code, ct, body)
 	}
@@ -802,10 +819,10 @@ func TestEndToEnd(t *testing.T) {
 	if phone.topic != topic || phone.mdmURL != e.srv.URL+"/mdm" || phone.scepURL != e.srv.URL+"/scep" {
 		t.Fatalf("profile settings: topic %q mdm %q scep %q", phone.topic, phone.mdmURL, phone.scepURL)
 	}
-	if code, _, _ := e.openLink(enr.URL); code != http.StatusGone {
+	if code, _, _ := e.openLink("sam", enr.URL); code != http.StatusGone {
 		t.Fatalf("second GET of the link: %d, want 410", code)
 	}
-	if code, _, _ := e.openLink(e.srv.URL + "/enroll/no-such-token"); code != http.StatusNotFound {
+	if code, _, _ := e.openLink("sam", e.srv.URL+"/enroll/no-such-token"); code != http.StatusNotFound {
 		t.Fatalf("unknown link: %d, want 404", code)
 	}
 
@@ -1044,16 +1061,33 @@ func TestEndToEnd(t *testing.T) {
 	late := e.enrol("sam", "iPhone14,5", "00008110-00FFEEDDCCBBAA99", "F2LLATE00001", 0x50)
 	late.nothingWaiting(false)
 
-	// Leaving: an admin deleting a device asks it to remove the MDM profile;
-	// a device that removes it itself checks out and is shown as unenrolled.
+	// Leaving: an admin deleting a device forgets it and revokes the
+	// certificate it enrolled with, so that its next check-in is refused.
 	e.call("sam", "DELETE", "/api/v1/devices/"+late.udid, nil, 403, nil)
-	e.call("admin", "DELETE", "/api/v1/devices/"+late.udid, nil, 204, nil)
-	cmd = late.expect(false, "RemoveProfile")
-	if cmd.Body["Identifier"] != "openmdm.enrollment" {
-		t.Fatalf("unenrol removal: %v", cmd.Body)
+	if code, out := late.put(ctCommand, map[string]any{"UDID": late.udid, "Status": "Idle"}, true); code != 200 {
+		t.Fatalf("before the delete: %d %s", code, out)
 	}
-	late.ack(false, cmd)
+	e.call("admin", "DELETE", "/api/v1/devices/"+late.udid, nil, 204, nil)
 	e.call("admin", "GET", "/api/v1/devices/"+late.udid, nil, 404, nil)
+	if code, out := late.put(ctCommand, map[string]any{"UDID": late.udid, "Status": "Idle"}, true); code == 200 {
+		t.Fatalf("a removed device was served: %s", out)
+	}
+	if code, _ := late.put(ctCheckin, map[string]any{"MessageType": "TokenUpdate", "UDID": late.udid, "Topic": late.topic, "PushMagic": "m", "Token": late.token}, true); code == 200 {
+		t.Fatal("a removed device could check in")
+	}
+	var events struct {
+		Events []core.Event `json:"events"`
+	}
+	e.call("admin", "GET", "/api/v1/events", nil, 200, &events)
+	revoked := false
+	for _, ev := range events.Events {
+		revoked = revoked || (ev.Kind == "device.deleted" && ev.Subject == late.udid && strings.Contains(ev.Detail, "certificate revoked"))
+	}
+	if !revoked {
+		t.Fatal("no audit event says the certificate was revoked")
+	}
+	// A device that removes the MDM profile itself checks out and is shown
+	// as unenrolled.
 	phone.checkin(map[string]any{"MessageType": "CheckOut", "UDID": phone.udid, "Topic": phone.topic})
 	waitFor(t, "the phone to be unenrolled", func() bool {
 		for _, d := range e.devices("sam") {

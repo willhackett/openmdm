@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -539,7 +540,7 @@ func TestReopen(t *testing.T) {
 		t.Fatalf("serial after reopen: %d (last %d) %v", next, last, err)
 	}
 	var n int
-	if err := s.r.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil || n != 1 {
+	if err := s.r.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("migrations table: %d %v", n, err)
 	}
 }
@@ -607,5 +608,58 @@ func TestMigrationsLoad(t *testing.T) {
 	ms, err := loadMigrations()
 	if err != nil || len(ms) == 0 || ms[0].version != 1 {
 		t.Fatalf("%+v %v", ms, err)
+	}
+}
+
+// A database made by the first version of the schema, with a device in it,
+// opens, gains cert_sha256, and keeps what it had.
+func TestMigrationFrom0001(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", fileDSN(path, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := migrationFiles.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		string(first),
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)`,
+		`INSERT INTO schema_migrations VALUES (1, '0001_init.sql', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO devices (id, username, platform, serial_number, device_name, status, enrolled_at, last_seen_at)
+		 VALUES ('UDID-1', 'alice', 'macos', 'C02X', 'Alice Mac', 'enrolled', '2026-01-02T03:04:05.000000000Z', '2026-01-03T00:00:00.000000000Z')`,
+	} {
+		if _, err := raw.Exec(q); err != nil {
+			t.Fatalf("%v\n%s", err, q)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	d, err := s.GetDevice(ctx, "UDID-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Username != "alice" || d.SerialNumber != "C02X" || d.DeviceName != "Alice Mac" || d.Status != core.DeviceEnrolled ||
+		d.EnrolledAt.IsZero() || d.CertSHA256 != "" {
+		t.Fatalf("existing row changed: %+v", d)
+	}
+	d.CertSHA256 = "abc123"
+	if err := s.UpsertDevice(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetDevice(ctx, "UDID-1"); got.CertSHA256 != "abc123" || got.Username != "alice" {
+		t.Fatalf("%+v", got)
+	}
+	var n int
+	if err := s.r.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("migrations: %d %v", n, err)
 	}
 }

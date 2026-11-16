@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -36,18 +37,27 @@ type Deps struct {
 	MDM        core.MDM
 	Enroller   core.Enroller
 	Authority  core.Authority
-	Config     core.Config
-	Version    string
-	Logger     *slog.Logger
+	// Sealer seals the private keys of a pending push certificate request.
+	Sealer  core.Sealer
+	Config  core.Config
+	Version string
+	Logger  *slog.Logger
 	// Now is the clock; time.Now if nil.
 	Now func() time.Time
+	// SigningURL and SigningClient reach the push certificate signing
+	// service (mdmcert.download); the defaults are the real service. Tests
+	// point them at a fake.
+	SigningURL    string
+	SigningClient *http.Client
 }
 
 // API serves the handlers.
 type API struct {
-	d   Deps
-	log *slog.Logger
-	now func() time.Time
+	d Deps
+	// pushMu serialises everything that touches a pending push request.
+	pushMu sync.Mutex
+	log    *slog.Logger
+	now    func() time.Time
 }
 
 // New builds an API. Missing Logger and Now get defaults.
@@ -106,6 +116,12 @@ func (a *API) Handler() http.Handler {
 
 		r.With(admin).Get("/settings", a.getSettings)
 		r.With(admin).Put("/settings/push-certificate", a.putPushCertificate)
+		r.With(admin).Post("/settings/push-certificate/csr", a.postPushCSR)
+		r.With(admin).Get("/settings/push-certificate/csr", a.getPushCSR)
+		r.With(admin).Post("/settings/push-certificate/request", a.postPushRequest)
+		r.With(admin).Get("/settings/push-certificate/request", a.getPushRequest)
+		r.With(admin).Delete("/settings/push-certificate/request", a.deletePushRequest)
+		r.With(admin).Post("/settings/push-certificate/request/decrypt", a.decryptPushRequest)
 		r.With(admin).Get("/settings/ca.pem", a.getCAPEM)
 
 		r.With(admin).Get("/events", a.listEvents)
@@ -113,7 +129,8 @@ func (a *API) Handler() http.Handler {
 	return r
 }
 
-// EnrollHandler serves GET /enroll/{token}; no session.
+// EnrollHandler serves GET /enroll/{token}. The caller mounts it behind the
+// session middleware: the handler needs the signed-in person.
 func (a *API) EnrollHandler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(a.recoverer)

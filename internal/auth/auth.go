@@ -43,13 +43,12 @@ const (
 
 // Auth does the sign-in and the sessions. Build one with New.
 type Auth struct {
-	cfg      core.OIDCConfig
-	store    core.Store
-	log      *slog.Logger
-	redirect string
-	secure   bool
-	client   *http.Client
-	now      func() time.Time
+	cfg    core.OIDCConfig
+	store  core.Store
+	log    *slog.Logger
+	bases  []base
+	client *http.Client
+	now    func() time.Time
 
 	mu       sync.Mutex // guards the lazily built parts below
 	provider *oidc.Provider
@@ -57,16 +56,56 @@ type Auth struct {
 	sc       *securecookie.SecureCookie
 }
 
-// New checks the configuration and builds an Auth. It does not contact the
-// identity provider, which may be down or not started yet: that happens on
-// first use and is retried on a later request if it failed.
-func New(cfg core.OIDCConfig, adminURL string, store core.Store, logger *slog.Logger) (*Auth, error) {
+// base is one external name the server is known by.
+type base struct {
+	host   string // host[:port], lower case: what a request's Host is compared with
+	secure bool   // the base's scheme is https
+	url    string // scheme://host[:port], no trailing slash
+}
+
+func (b base) redirectURI() string { return b.url + "/auth/callback" }
+
+// baseFor returns the base whose host is the request's Host header.
+func (a *Auth) baseFor(r *http.Request) (base, bool) {
+	return a.baseByHost(r.Host)
+}
+
+func (a *Auth) baseByHost(host string) (base, bool) {
+	host = strings.ToLower(host)
+	for _, b := range a.bases {
+		if b.host == host {
+			return b, true
+		}
+	}
+	return base{}, false
+}
+
+// New checks the configuration and builds an Auth. baseURLs are the external
+// addresses the server is known by (admin_url and public_url); sign-in works
+// on each, using the one a request came in on for the redirect address. It
+// does not contact the identity provider, which may be down or not started
+// yet: that happens on first use and is retried on a later request.
+func New(cfg core.OIDCConfig, baseURLs []string, store core.Store, logger *slog.Logger) (*Auth, error) {
 	if cfg.Issuer == "" || cfg.ClientID == "" {
 		return nil, errors.New("auth: oidc issuer and client_id are required")
 	}
-	u, err := url.Parse(adminURL)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, fmt.Errorf("auth: admin URL %q is not an http(s) URL", adminURL)
+	var bases []base
+	for _, raw := range baseURLs {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return nil, fmt.Errorf("auth: URL %q is not an http(s) URL", raw)
+		}
+		host := strings.ToLower(u.Host)
+		dup := false
+		for _, b := range bases {
+			dup = dup || b.host == host
+		}
+		if !dup {
+			bases = append(bases, base{host: host, secure: u.Scheme == "https", url: u.Scheme + "://" + u.Host})
+		}
+	}
+	if len(bases) == 0 {
+		return nil, errors.New("auth: at least one external URL is required")
 	}
 	if store == nil {
 		return nil, errors.New("auth: store is required")
@@ -97,18 +136,24 @@ func New(cfg core.OIDCConfig, adminURL string, store core.Store, logger *slog.Lo
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
 	return &Auth{
-		cfg:      cfg,
-		store:    store,
-		log:      logger,
-		redirect: strings.TrimRight(adminURL, "/") + "/auth/callback",
-		secure:   u.Scheme == "https",
-		client:   &http.Client{Transport: tr, Timeout: 15 * time.Second},
-		now:      time.Now,
+		cfg:    cfg,
+		store:  store,
+		log:    logger,
+		bases:  bases,
+		client: &http.Client{Transport: tr, Timeout: 15 * time.Second},
+		now:    time.Now,
 	}, nil
 }
 
-// RedirectURI is what the identity provider must list as allowed.
-func (a *Auth) RedirectURI() string { return a.redirect }
+// RedirectURIs are what the identity provider must list as allowed: one per
+// name the server is known by.
+func (a *Auth) RedirectURIs() []string {
+	out := make([]string, 0, len(a.bases))
+	for _, b := range a.bases {
+		out = append(out, b.redirectURI())
+	}
+	return out
+}
 
 // discover returns the provider's configuration, fetching it the first time
 // and again after a failure.
@@ -129,7 +174,6 @@ func (a *Auth) discover() (*oidc.Provider, *oauth2.Config, error) {
 		ClientID:     a.cfg.ClientID,
 		ClientSecret: a.cfg.ClientSecret,
 		Endpoint:     p.Endpoint(),
-		RedirectURL:  a.redirect,
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
 	return a.provider, a.oauth, nil
@@ -187,13 +231,14 @@ type flowData struct {
 	Nonce    string `json:"n"`
 	Verifier string `json:"v"`
 	Next     string `json:"x"`
+	Base     string `json:"b"` // the external base URL the login came in on
 	Exp      int64  `json:"e"`
 }
 
-func (a *Auth) setCookie(w http.ResponseWriter, name, value, path string, ttl time.Duration) {
+func (a *Auth) setCookie(w http.ResponseWriter, secure bool, name, value, path string, ttl time.Duration) {
 	c := &http.Cookie{
 		Name: name, Value: value, Path: path,
-		HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
 	}
 	if ttl > 0 {
 		c.MaxAge = int(ttl.Seconds())
@@ -258,11 +303,17 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	b, ok := a.baseFor(r)
+	if !ok {
+		a.unknownHost(w, r)
+		return
+	}
 	_, conf, err := a.discover()
 	if err != nil {
 		a.fail(w, http.StatusBadGateway, "the identity provider could not be reached", err)
 		return
 	}
+	conf = withRedirect(conf, b)
 	sc, err := a.codec(r.Context())
 	if err != nil {
 		a.fail(w, http.StatusInternalServerError, "the server could not prepare a session", err)
@@ -276,18 +327,32 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	fd := flowData{
 		State: state, Nonce: nonce, Verifier: oauth2.GenerateVerifier(),
-		Next: safeNext(r.URL.Query().Get("next")),
-		Exp:  a.now().Add(flowTTL).Unix(),
+		Next: safeNext(r.URL.Query().Get("next")), Base: b.url,
+		Exp: a.now().Add(flowTTL).Unix(),
 	}
 	enc, err := sc.Encode(flowCookie, fd)
 	if err != nil {
 		a.fail(w, http.StatusInternalServerError, "could not start sign-in", err)
 		return
 	}
-	a.setCookie(w, flowCookie, enc, "/auth", flowTTL)
+	a.setCookie(w, b.secure, flowCookie, enc, "/auth", flowTTL)
 	authURL := conf.AuthCodeURL(state, oauth2.S256ChallengeOption(fd.Verifier), oidc.Nonce(nonce))
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// unknownHost refuses a request that came in on a name the server is not
+// known by. A redirect address is never built from an unknown Host.
+func (a *Auth) unknownHost(w http.ResponseWriter, r *http.Request) {
+	a.log.Warn("sign-in refused: unknown host", "host", sanitize(r.Host))
+	http.Error(w, "bad request: this server is not known by that name", http.StatusBadRequest)
+}
+
+// withRedirect returns a copy of conf whose redirect address is on base b.
+func withRedirect(conf *oauth2.Config, b base) *oauth2.Config {
+	c := *conf
+	c.RedirectURL = b.redirectURI()
+	return &c
 }
 
 func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
@@ -296,13 +361,18 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	b, ok := a.baseFor(r)
+	if !ok {
+		a.unknownHost(w, r)
+		return
+	}
 	sc, err := a.codec(r.Context())
 	if err != nil {
 		a.fail(w, http.StatusInternalServerError, "the server could not prepare a session", err)
 		return
 	}
 	// The flow cookie is single use whatever happens next.
-	a.setCookie(w, flowCookie, "", "/auth", 0)
+	a.setCookie(w, b.secure, flowCookie, "", "/auth", 0)
 
 	ck, err := r.Cookie(flowCookie)
 	if err != nil {
@@ -312,6 +382,11 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	var fd flowData
 	if err := sc.Decode(flowCookie, ck.Value, &fd); err != nil || a.now().Unix() > fd.Exp {
 		a.fail(w, http.StatusBadRequest, "the sign-in did not start here or took too long", err)
+		return
+	}
+	// The exchange must use the redirect address the login used.
+	if fd.Base != b.url {
+		a.fail(w, http.StatusBadRequest, "the sign-in did not start on this name", nil)
 		return
 	}
 	q := r.URL.Query()
@@ -333,6 +408,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, http.StatusBadGateway, "the identity provider could not be reached", err)
 		return
 	}
+	conf = withRedirect(conf, b)
 	ctx, cancel := context.WithTimeout(oidc.ClientContext(r.Context(), a.client), 30*time.Second)
 	defer cancel()
 
@@ -414,7 +490,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, http.StatusInternalServerError, "could not make a session", err)
 		return
 	}
-	a.setCookie(w, sessionCookie, enc, "/", sessionTTL)
+	a.setCookie(w, b.secure, sessionCookie, enc, "/", sessionTTL)
 	a.log.Info("signed in", "user", username, "role", string(role))
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, safeNext(fd.Next), http.StatusFound)
@@ -426,7 +502,11 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	a.setCookie(w, sessionCookie, "", "/", 0)
+	secure := r.TLS != nil
+	if b, ok := a.baseFor(r); ok {
+		secure = b.secure
+	}
+	a.setCookie(w, secure, sessionCookie, "", "/", 0)
 	w.WriteHeader(http.StatusNoContent)
 }
 

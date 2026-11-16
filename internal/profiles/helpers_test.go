@@ -58,6 +58,7 @@ func (a *fakeAuthority) SigningIdentity() (*x509.Certificate, crypto.Signer) {
 	return a.signer, a.key
 }
 func (a *fakeAuthority) VerifyIssued(context.Context, *x509.Certificate) error { return nil }
+func (a *fakeAuthority) Revoke(context.Context, string) error                  { return nil }
 
 func newAuthority(t *testing.T) *fakeAuthority {
 	t.Helper()

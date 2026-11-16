@@ -119,6 +119,10 @@ type Authority interface {
 	// VerifyIssued reports whether cert was issued by this CA, is within its
 	// validity and has not been revoked.
 	VerifyIssued(ctx context.Context, cert *x509.Certificate) error
+	// Revoke marks an issued certificate (hex SHA-256 of its DER) as
+	// revoked, after which VerifyIssued refuses it. Revoking twice is not an
+	// error; an unknown certificate is ErrNotFound.
+	Revoke(ctx context.Context, sha256hex string) error
 }
 
 // Rendered is a profile made ready for one device.

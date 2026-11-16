@@ -81,6 +81,10 @@ type Device struct {
 	UserChannelID string    `json:"user_channel_id"`
 	EnrolledAt    time.Time `json:"enrolled_at"`
 	LastSeenAt    time.Time `json:"last_seen_at"`
+	// CertSHA256 is the hex SHA-256 of the identity certificate the device
+	// presented (core.Checkin.CertSHA256), so that removing the device can
+	// revoke it. Empty for a device recorded before this was kept.
+	CertSHA256 string `json:"cert_sha256"`
 }
 
 // Channel is which MDM connection a command travels on.

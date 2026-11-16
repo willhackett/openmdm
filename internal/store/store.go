@@ -387,13 +387,13 @@ func (s *Store) ListUsers(ctx context.Context) ([]core.User, error) {
 
 // ---- devices ----
 
-const deviceCols = `id, username, platform, serial_number, model, device_name, os_version, status, user_channel_id, enrolled_at, last_seen_at`
+const deviceCols = `id, username, platform, serial_number, model, device_name, os_version, status, user_channel_id, enrolled_at, last_seen_at, cert_sha256`
 
 func scanDevice(sc scanner) (core.Device, error) {
 	var d core.Device
 	var platform, status, enrolled, seen string
 	if err := sc.Scan(&d.ID, &d.Username, &platform, &d.SerialNumber, &d.Model, &d.DeviceName,
-		&d.OSVersion, &status, &d.UserChannelID, &enrolled, &seen); err != nil {
+		&d.OSVersion, &status, &d.UserChannelID, &enrolled, &seen, &d.CertSHA256); err != nil {
 		return d, err
 	}
 	d.Platform, d.Status = core.Platform(platform), core.DeviceStatus(status)
@@ -409,7 +409,7 @@ func (s *Store) UpsertDevice(ctx context.Context, d core.Device) error {
 	if d.ID == "" {
 		return fmt.Errorf("device id is required: %w", core.ErrInvalid)
 	}
-	_, err := s.w.ExecContext(ctx, `INSERT INTO devices (`+deviceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.w.ExecContext(ctx, `INSERT INTO devices (`+deviceCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			username = excluded.username, platform = excluded.platform,
 			serial_number = excluded.serial_number, model = excluded.model,
@@ -417,9 +417,9 @@ func (s *Store) UpsertDevice(ctx context.Context, d core.Device) error {
 			status = excluded.status, user_channel_id = excluded.user_channel_id,
 			enrolled_at = CASE WHEN excluded.enrolled_at = '' THEN devices.enrolled_at
 			                   ELSE excluded.enrolled_at END,
-			last_seen_at = excluded.last_seen_at`,
+			last_seen_at = excluded.last_seen_at, cert_sha256 = excluded.cert_sha256`,
 		d.ID, lower(d.Username), string(d.Platform), d.SerialNumber, d.Model, d.DeviceName,
-		d.OSVersion, string(d.Status), d.UserChannelID, ts(d.EnrolledAt), ts(d.LastSeenAt))
+		d.OSVersion, string(d.Status), d.UserChannelID, ts(d.EnrolledAt), ts(d.LastSeenAt), d.CertSHA256)
 	return err
 }
 

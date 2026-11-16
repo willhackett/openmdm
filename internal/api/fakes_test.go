@@ -6,8 +6,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/pem"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -335,6 +338,8 @@ func (s *memStore) lastEvent() core.Event {
 	return s.events[len(s.events)-1]
 }
 
+var oidUID = asn1.ObjectIdentifier{0, 9, 2342, 19200300, 100, 1, 1}
+
 // fakeSecrets is an in-memory core.SecretStore.
 type fakeSecrets struct {
 	mu     sync.Mutex
@@ -473,6 +478,9 @@ type fakeMDM struct {
 	setErr    error
 	setCalls  int
 	n         int
+	// strictPush makes SetPushCert check the pair like the real one does.
+	strictPush bool
+	lastKeyPEM []byte
 }
 
 func (f *fakeMDM) next() string {
@@ -517,6 +525,26 @@ func (f *fakeMDM) SetPushCert(_ context.Context, c, k []byte) error {
 	if f.setErr != nil {
 		return f.setErr
 	}
+	if f.strictPush {
+		// Like the real one: the key must belong to the certificate, which
+		// must carry an APNs topic in its subject's UID.
+		if _, err := tls.X509KeyPair(c, k); err != nil {
+			return fmt.Errorf("%w: certificate and key do not match", core.ErrInvalid)
+		}
+		blk, _ := pem.Decode(c)
+		cert, err := x509.ParseCertificate(blk.Bytes)
+		if err != nil {
+			return fmt.Errorf("%w: certificate: %v", core.ErrInvalid, err)
+		}
+		for _, n := range cert.Subject.Names {
+			if n.Type.Equal(oidUID) {
+				f.lastKeyPEM = append([]byte(nil), k...)
+				f.push = core.PushInfo{Configured: true, Topic: fmt.Sprint(n.Value), NotAfter: cert.NotAfter.UTC()}
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: not an APNs MDM push certificate", core.ErrInvalid)
+	}
 	f.push = core.PushInfo{Configured: true, Topic: "com.apple.mgmt.External.test", NotAfter: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}
 	return nil
 }
@@ -532,7 +560,12 @@ func (f *fakeEnroller) EnrollmentProfile(_ context.Context, e core.Enrollment) (
 	return []byte("<plist>enrol for " + e.Username + "</plist>"), nil
 }
 
-type fakeAuthority struct{ cert *x509.Certificate }
+type fakeAuthority struct {
+	cert      *x509.Certificate
+	mu        sync.Mutex
+	revoked   []string
+	revokeErr error
+}
 
 func newFakeAuthority() *fakeAuthority {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -550,3 +583,9 @@ func (f *fakeAuthority) SigningIdentity() (*x509.Certificate, crypto.Signer) {
 	return nil, nil
 }
 func (f *fakeAuthority) VerifyIssued(context.Context, *x509.Certificate) error { return nil }
+func (f *fakeAuthority) Revoke(_ context.Context, sha string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revoked = append(f.revoked, sha)
+	return f.revokeErr
+}
