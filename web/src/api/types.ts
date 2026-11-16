@@ -105,6 +105,30 @@ export interface PushRequest {
   requested_at?: string;
 }
 
+/** The MDM vendor certificate that signs push certificate requests. Only `configured` is set when there is none. */
+export interface VendorCertificate {
+  configured: boolean;
+  subject?: string;
+  not_after?: string;
+  sha256?: string;
+}
+
+/** What PUT /settings/vendor-certificate takes: a certificate and its key, or a .p12 file (base64) and its password. */
+export type VendorInput = { certificate_pem: string; key_pem: string } | { p12: string; password: string };
+
+export interface VendorSaved {
+  vendor: VendorCertificate;
+  /** Set when the certificate does not chain to Apple's WWDR G3 intermediate. */
+  warning?: string;
+}
+
+export interface VendorSigned {
+  filename: string;
+  /** The base64 text to upload at Apple's push certificate portal. */
+  content: string;
+  request: PushRequest;
+}
+
 export interface PushCsr {
   filename: string;
   csr_pem: string;
@@ -208,6 +232,11 @@ export interface Api {
   requestPushCertificate(email: string): Promise<PushRequest>;
   decryptPushRequest(encrypted: string): Promise<{ filename: string; content: string }>;
   cancelPushRequest(): Promise<void>;
+  vendorCertificate(): Promise<VendorCertificate>;
+  setVendorCertificate(input: VendorInput): Promise<VendorSaved>;
+  deleteVendorCertificate(): Promise<void>;
+  /** Signs the pending request (making one if none is pending) with the vendor certificate. */
+  vendorSign(): Promise<VendorSigned>;
   events(limit?: number): Promise<Event[]>;
   logout(): Promise<void>;
 }

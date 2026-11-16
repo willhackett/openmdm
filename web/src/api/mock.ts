@@ -15,6 +15,7 @@ import type {
   PushInfo,
   PushCsr,
   PushRequest,
+  VendorCertificate,
   SecretEntry,
   TemplateInfo,
   User,
@@ -25,6 +26,8 @@ export interface MockControls {
   setViewer(username: string): void;
   pushConfigured(): boolean;
   setPushConfigured(on: boolean): void;
+  vendorConfigured(): boolean;
+  setVendorConfigured(on: boolean): void;
   subscribe(fn: () => void): () => void;
 }
 
@@ -432,6 +435,14 @@ let pushOn = true;
 let pushExpiry = ahead(22 * DAY);
 /** A pending CSR; email is empty until it has been sent for countersigning. */
 let pushRequestState: { email: string; requested_at: string } | null = null;
+/** The MDM vendor certificate; none until one is uploaded. */
+let vendor: VendorCertificate = { configured: false };
+const mockVendor: VendorCertificate = {
+  configured: true,
+  subject: "CN=MDM Vendor: Example Household,OU=7XQ2LM4ABC,O=Example Household,C=GB",
+  not_after: ahead(2 * 365 * DAY),
+  sha256: "3f5a9c07d1e24b86a0c3f17e9b5d42680ae1c7f3b9d5024e6a8c1f7b3d9e5a02",
+};
 let viewer = "alex";
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((f) => f());
@@ -755,6 +766,11 @@ export const mockControls: MockControls = {
     pushOn = on;
     notify();
   },
+  vendorConfigured: () => vendor.configured,
+  setVendorConfigured: (on) => {
+    vendor = on ? { ...mockVendor } : { configured: false };
+    notify();
+  },
   subscribe: (fn) => {
     listeners.add(fn);
     return () => listeners.delete(fn);
@@ -1029,12 +1045,8 @@ export const mockApi: Api = {
     needAdmin();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new ApiError(400, "That is not an email address.");
     if (!pushRequestState) pushRequestState = { email: "", requested_at: ago(0) };
-    if (/@(gmail|googlemail|outlook|hotmail|yahoo|icloud|proton|aol)\./i.test(email))
-      throw new ApiError(502, "mdmcert.download refused the request: free-mail addresses are not accepted. Use an address at your own domain.");
-    // The pending CSR is used (one is made if there is none); a refusal above leaves it pending.
-    pushRequestState = { email, requested_at: pushRequestState?.requested_at ?? ago(0) };
-    addEvent(me().username, "settings.push_request", email);
-    return { pending: true, ...pushRequestState };
+    // The service's JSON API is deprecated; the pending CSR is kept.
+    throw new ApiError(502, "the signing service (mdmcert.download) refused the request: This API has been deprecated; please visit https://mdmcert.download/");
   },
   async decryptPushRequest(encrypted) {
     await delay(400);
@@ -1047,6 +1059,51 @@ export const mockApi: Api = {
     await delay();
     needAdmin();
     pushRequestState = null;
+  },
+  async vendorCertificate() {
+    await delay();
+    needAdmin();
+    return clone(vendor);
+  },
+  async setVendorCertificate(input) {
+    await delay(500);
+    needAdmin();
+    let text: string;
+    if ("p12" in input) {
+      if (!input.p12) throw new ApiError(400, "p12 must be the base64 text of a .p12 file");
+      if (input.password === "wrong") throw new ApiError(400, "the .p12 file could not be opened: the password is wrong");
+      text = input.p12;
+    } else {
+      if (!input.certificate_pem.trim()) throw new ApiError(400, "the certificate is empty");
+      if (!/BEGIN [A-Z ]*PRIVATE KEY/.test(input.key_pem)) throw new ApiError(400, "the private key is not an RSA private key in PEM form");
+      if (input.certificate_pem.includes("MISMATCH")) throw new ApiError(400, "the private key does not belong to the certificate");
+      text = input.certificate_pem + input.key_pem;
+    }
+    vendor = { ...mockVendor };
+    addEvent(me().username, "settings.vendor_certificate_set", "vendor-certificate", vendor.subject);
+    // Only a certificate issued by Apple's WWDR G3 intermediate chains to it.
+    const warning = text.includes("WWDR")
+      ? undefined
+      : "The certificate does not chain to Apple's WWDR G3 intermediate, so the chain could not be verified against it. Apple's portal may reject requests signed with it.";
+    return { vendor: clone(vendor), warning };
+  },
+  async deleteVendorCertificate() {
+    await delay();
+    needAdmin();
+    if (vendor.configured) addEvent(me().username, "settings.vendor_certificate_deleted", "vendor-certificate");
+    vendor = { configured: false };
+  },
+  async vendorSign() {
+    await delay(600);
+    needAdmin();
+    if (!vendor.configured) throw new ApiError(400, "no MDM vendor certificate is configured: add one first");
+    if (!pushRequestState) pushRequestState = { email: "", requested_at: ago(0) };
+    addEvent(me().username, "settings.push_vendor_sign", "push-certificate", `vendor certificate ${vendor.sha256?.slice(0, 16)}`);
+    return {
+      filename: "push-certificate-request.plist.b64",
+      content: "PD94bWwgdmVyc2lvbj0iMS4wIj8+PHBsaXN0Pk1vY2sgdmVuZG9yLXNpZ25lZCByZXF1ZXN0PC9wbGlzdD4=",
+      request: { pending: true, ...pushRequestState },
+    };
   },
 
   async events(limit = 200) {

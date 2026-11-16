@@ -88,6 +88,10 @@ export const realApi: Api = {
   requestPushCertificate: async (email) => (await request<{ request: never }>("POST", "/settings/push-certificate/request", { email })).request,
   decryptPushRequest: (encrypted) => request("POST", "/settings/push-certificate/request/decrypt", { encrypted }),
   cancelPushRequest: () => request("DELETE", "/settings/push-certificate/request"),
+  vendorCertificate: async () => (await request<{ vendor: never }>("GET", "/settings/vendor-certificate")).vendor,
+  setVendorCertificate: (input) => request("PUT", "/settings/vendor-certificate", input),
+  deleteVendorCertificate: () => request("DELETE", "/settings/vendor-certificate"),
+  vendorSign: () => request("POST", "/settings/push-certificate/vendor-sign"),
   events: async (limit = 200) => (await request<{ events: never[] }>("GET", `/events?limit=${limit}`)).events,
   logout: async () => {
     await fetch("/auth/logout", {

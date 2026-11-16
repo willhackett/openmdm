@@ -1402,3 +1402,25 @@ dialog.modal::backdrop {
 .dt td > .tag {
   justify-self: start;
 }
+
+.way {
+  margin: 1rem 0 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.way h4 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.way-sign {
+  margin: 0 0 0.75rem;
+}
+.way .facts {
+  margin-bottom: 0.75rem;
+}
+.facts + .row,
+.banner + .row {
+  margin-top: 0.75rem;
+}

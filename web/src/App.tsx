@@ -106,6 +106,17 @@ function MockBar({ onChange }: { onChange: () => void }) {
         />{" "}
         Push certificate configured
       </label>
+      <label class="check">
+        <input
+          type="checkbox"
+          checked={c.vendorConfigured()}
+          onChange={(e) => {
+            c.setVendorConfigured((e.target as HTMLInputElement).checked);
+            onChange();
+          }}
+        />{" "}
+        MDM vendor certificate configured
+      </label>
     </div>
   );
 }

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { api } from "../api";
-import type { PushInfo, PushRequest } from "../api";
+import type { PushInfo, PushRequest, VendorCertificate } from "../api";
 import { useAction, useLoad } from "../lib/hooks";
 import { absDate, daysUntil, readFileAsText } from "../lib/format";
 import { Async, Facts, Time, toast } from "../components/ui";
+import type { Loaded } from "../lib/hooks";
+import { VENDOR_HELP_URL, VendorManage, vendorExpired } from "./VendorCert";
 
 interface Pem {
   text: string;
@@ -22,6 +24,7 @@ export function TextOrFile({
   onChange,
   hideContent,
   placeholder,
+  read = readFileAsText,
 }: {
   id: string;
   label: string;
@@ -30,6 +33,8 @@ export function TextOrFile({
   onChange: (v: Pem) => void;
   hideContent?: boolean;
   placeholder: string;
+  /** How a chosen file becomes text; the default reads it as text. */
+  read?: (f: File) => Promise<string>;
 }) {
   const [mode, setMode] = useState<"file" | "paste">("file");
   const [err, setErr] = useState("");
@@ -58,7 +63,7 @@ export function TextOrFile({
               setErr("");
               if (!f) return onChange(empty);
               try {
-                onChange({ text: await readFileAsText(f), fileName: f.name });
+                onChange({ text: await read(f), fileName: f.name });
               } catch (x) {
                 setErr(x instanceof Error ? x.message : "The file could not be read.");
               }
@@ -168,28 +173,29 @@ function Err({ text }: { text: string }) {
   ) : null;
 }
 
-function Flow({ req, reloadReq, onSaved, onCancel, renewing }: { req: PushRequest; reloadReq: () => void; onSaved: (p: PushInfo) => void; onCancel?: () => void; renewing: boolean }) {
-  const [email, setEmail] = useState("");
+function Flow({ req, reloadReq, onSaved, onCancel, renewing, vendor }: { req: PushRequest; reloadReq: () => void; onSaved: (p: PushInfo) => void; onCancel?: () => void; renewing: boolean; vendor: Loaded<VendorCertificate> }) {
   const [encrypted, setEncrypted] = useState<Pem>(empty);
   const [out, setOut] = useState<{ filename: string; content: string } | null>(null);
+  const [signed, setSigned] = useState<{ filename: string; content: string } | null>(null);
   const [cert, setCert] = useState<Pem>(empty);
+  const sign = useAction();
   const gen = useAction();
   const again = useAction();
   const reset = useAction();
-  const send = useAction();
   const dec = useAction();
   const up = useAction();
   const pending = req.pending;
   const sent = pending && !!req.email;
   const s1: StepState = pending ? "done" : "current";
-  const s2: StepState = !pending ? "waiting" : out ? "done" : "current";
-  const s3: StepState = !pending ? "waiting" : out ? "current" : "waiting";
+  const countersigned = !!out || !!signed;
+  const s2: StepState = !pending ? "waiting" : countersigned ? "done" : "current";
+  const s3: StepState = !pending ? "waiting" : countersigned ? "current" : "waiting";
 
   return (
     <ol class="steps">
       <Step n={1} title="Generate a signing request" state={s1}>
         <p>
-          OpenMDM makes a new key and a signing request (CSR) for it. The private key stays on the server, sealed.
+          OpenMDM makes a new key and a signing request (CSR) for it. The private key stays on the server, sealed. Apple's portal only accepts a request that an MDM vendor has countersigned, which is step 2, so the CSR is not for uploading as it is. Keep the file if someone else signs for you.
           {renewing && " The current certificate keeps working until the new one is uploaded."}
         </p>
         {pending ? (
@@ -219,6 +225,7 @@ function Flow({ req, reloadReq, onSaved, onCancel, renewing }: { req: PushReques
                   });
                   if (ok) {
                     setOut(null);
+                    setSigned(null);
                     reloadReq();
                   }
                 }}
@@ -256,78 +263,144 @@ function Flow({ req, reloadReq, onSaved, onCancel, renewing }: { req: PushReques
         )}
       </Step>
 
-      <Step n={2} title="Get it signed by Apple" state={s2}>
+      <Step n={2} title="Have it countersigned" state={s2}>
         {!pending ? (
-          <p class="muted">Once you have the request, you take it to Apple.</p>
+          <p class="muted">Once you have the request, an MDM vendor has to countersign it.</p>
         ) : (
           <>
-            <p>
-              Open{" "}
-              <a href="https://identity.apple.com/pushcert" target="_blank" rel="noopener noreferrer">
-                https://identity.apple.com/pushcert
-              </a>{" "}
-              in a new tab and sign in with an Apple ID. Upload the request, then download the <code>.pem</code> Apple gives you and bring it to step 3.
-            </p>
-            <p>
-              <strong>Use the same Apple ID every year</strong> to renew. A different one cannot renew the certificate.
-            </p>
-            <details class="have-cert fallback">
-              <summary>Apple rejected the CSR</summary>
-              <div class="have-cert-body">
-                <p>
-                  Apple's portal is documented as accepting only requests countersigned by an MDM vendor. The free service mdmcert.download can countersign this same CSR.
-                </p>
-                {!sent ? (
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      const r = await send.run(() => api.requestPushCertificate(email.trim()));
-                      if (r) reloadReq();
-                    }}
-                  >
-                    <div class="field">
-                      <label for="push-email">Email address (required)</label>
-                      <input id="push-email" type="email" required autoComplete="email" value={email} aria-describedby="push-email-help" onInput={(e) => setEmail((e.target as HTMLInputElement).value)} />
-                      <p id="push-email-help" class="hint">
-                        Use a company address: the service refuses free-mail ones such as Gmail or Outlook. This address is sent to mdmcert.download, which emails you a file.
+            <p>Apple's portal only accepts a request that an MDM vendor has countersigned. There are two ways to get that.</p>
+            <div class="way">
+              <h4>Sign it yourself with an MDM vendor certificate</h4>
+              <Async
+                l={vendor}
+                what="Checking for a vendor certificate"
+                render={(v) => (
+                  <>
+                    {!v.configured && (
+                      <p>
+                        An MDM vendor certificate lets you countersign the request yourself, the way Apple documents it. The Account Holder of an Apple Developer Program membership asks Apple for access to the{" "}
+                        <a href={VENDOR_HELP_URL} target="_blank" rel="noopener noreferrer">
+                          MDM Vendor CSR Signing Certificate
+                        </a>
+                        , creates it in the developer portal, and exports it with its private key. Add it here once and OpenMDM signs every request with it.
                       </p>
-                    </div>
-                    <Err text={send.error} />
-                    <button type="submit" disabled={send.busy || !email.trim()}>
-                      {send.busy ? "Sending…" : "Send for countersigning"}
-                    </button>
-                  </form>
-                ) : (
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      if (!encrypted.text.trim()) return;
-                      const r = await dec.run(() => api.decryptPushRequest(encrypted.text));
-                      if (r) {
-                        setOut(r);
-                        download(r.filename, r.content);
+                    )}
+                    <VendorManage
+                      vendor={v}
+                      reload={vendor.reload}
+                      extra={
+                        v.configured && (
+                          <div class="way-sign">
+                            <Err text={sign.error} />
+                            <button
+                              type="button"
+                              class="primary"
+                              disabled={sign.busy || vendorExpired(v)}
+                              onClick={async () => {
+                                const r = await sign.run(() => api.vendorSign());
+                                if (r) {
+                                  setSigned({ filename: r.filename, content: r.content });
+                                  download(r.filename, r.content);
+                                  reloadReq();
+                                }
+                              }}
+                            >
+                              {sign.busy ? "Signing…" : signed ? "Sign it again" : "Sign the request"}
+                            </button>
+                          </div>
+                        )
                       }
-                    }}
-                  >
-                    <p>
-                      Sent for countersigning for <strong>{req.email}</strong> <span class="muted">(<Time iso={req.requested_at} />)</span>. When the email arrives, choose its file here.
-                    </p>
-                    <TextOrFile id="push-enc" label="The file mdmcert.download emailed (.p7)" accept=".p7,.p7b,.txt,.b64" value={encrypted} onChange={setEncrypted} placeholder="Paste the text of the emailed file" />
-                    <Err text={dec.error} />
-                    <button type="submit" disabled={dec.busy || !encrypted.text.trim()}>
-                      {dec.busy ? "Decrypting…" : "Decrypt"}
-                    </button>
-                    {out && (
-                      <div class="note step-note">
+                    />
+                    {v.configured && signed && (
+                      <div class="note step-note" role="status">
                         <p>
-                          <button type="button" onClick={() => download(out.filename, out.content)}>
-                            Download {out.filename}
+                          <strong>{signed.filename} is signed and downloaded.</strong>
+                        </p>
+                        <p>
+                          Open{" "}
+                          <a href="https://identity.apple.com/pushcert" target="_blank" rel="noopener noreferrer">
+                            https://identity.apple.com/pushcert
+                          </a>{" "}
+                          in a new tab, sign in with an Apple ID and upload that file. Then download the <code>.pem</code> Apple gives you and bring it to step 3.
+                        </p>
+                        <p>
+                          <strong>Use the same Apple ID every year</strong> to renew. A different one cannot renew the certificate.
+                        </p>
+                        <p>
+                          <button type="button" onClick={() => download(signed.filename, signed.content)}>
+                            Download {signed.filename} again
                           </button>
                         </p>
-                        <p>Upload this file at Apple's portal instead of the plain CSR.</p>
                       </div>
                     )}
-                  </form>
+                  </>
+                )}
+              />
+            </div>
+            <details class="have-cert fallback">
+              <summary>Use the free signing service mdmcert.download instead</summary>
+              <div class="have-cert-body">
+                <p>
+                  mdmcert.download is a free third-party service run by volunteers. Download the CSR, open the service and upload the CSR there, then follow its steps.
+                </p>
+                <Err text={again.error} />
+                <div class="row">
+                  <button
+                    type="button"
+                    disabled={again.busy}
+                    onClick={async () => {
+                      const r = await again.run(() => api.pushCsr());
+                      if (r) download(r.filename, r.csr_pem);
+                    }}
+                  >
+                    Download the CSR
+                  </button>
+                  <a class="button" href="https://mdmcert.download/" target="_blank" rel="noopener noreferrer">
+                    Open mdmcert.download
+                  </a>
+                </div>
+                <p>
+                  Then upload what it gives you at{" "}
+                  <a href="https://identity.apple.com/pushcert" target="_blank" rel="noopener noreferrer">
+                    https://identity.apple.com/pushcert
+                  </a>{" "}
+                  (new tab) with an Apple ID, the same one every year, and continue to step 3.
+                </p>
+                {sent && (
+                  <details class="have-cert fallback">
+                    <summary>The service sent me an encrypted file</summary>
+                    <form
+                      class="have-cert-body"
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (!encrypted.text.trim()) return;
+                        const r = await dec.run(() => api.decryptPushRequest(encrypted.text));
+                        if (r) {
+                          setOut(r);
+                          download(r.filename, r.content);
+                        }
+                      }}
+                    >
+                      <p>
+                        A request was sent to the service for <strong>{req.email}</strong> <span class="muted">(<Time iso={req.requested_at} />)</span>. Choose the file it emailed.
+                      </p>
+                      <TextOrFile id="push-enc" label="The file mdmcert.download emailed (.p7)" accept=".p7,.p7b,.txt,.b64" value={encrypted} onChange={setEncrypted} placeholder="Paste the text of the emailed file" />
+                      <Err text={dec.error} />
+                      <button type="submit" disabled={dec.busy || !encrypted.text.trim()}>
+                        {dec.busy ? "Decrypting…" : "Decrypt"}
+                      </button>
+                      {out && (
+                        <div class="note step-note">
+                          <p>
+                            <button type="button" onClick={() => download(out.filename, out.content)}>
+                              Download {out.filename}
+                            </button>
+                          </p>
+                          <p>Upload this file at Apple's portal, then continue to step 3.</p>
+                        </div>
+                      )}
+                    </form>
+                  </details>
                 )}
               </div>
             </details>
@@ -364,7 +437,7 @@ function Flow({ req, reloadReq, onSaved, onCancel, renewing }: { req: PushReques
   );
 }
 
-export function PushCertificate({ push, onChanged }: { push: PushInfo; onChanged: () => void }) {
+export function PushCertificate({ push, onChanged, vendor }: { push: PushInfo; onChanged: () => void; vendor: Loaded<VendorCertificate> }) {
   const l = useLoad(() => api.pushRequest(), []);
   const [renewing, setRenewing] = useState(false);
   const [saved, setSaved] = useState<PushInfo | null>(null);
@@ -440,7 +513,7 @@ export function PushCertificate({ push, onChanged }: { push: PushInfo; onChanged
         <Async
           l={l}
           what="Checking for a pending request"
-          render={(req) => <Flow req={req} reloadReq={l.reload} onSaved={onSaved} onCancel={renewing ? () => setRenewing(false) : undefined} renewing={renewing} />}
+          render={(req) => <Flow req={req} reloadReq={l.reload} onSaved={onSaved} onCancel={renewing ? () => setRenewing(false) : undefined} renewing={renewing} vendor={vendor} />}
         />
       )}
       <details class="have-cert">

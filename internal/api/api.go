@@ -122,6 +122,10 @@ func (a *API) Handler() http.Handler {
 		r.With(admin).Get("/settings/push-certificate/request", a.getPushRequest)
 		r.With(admin).Delete("/settings/push-certificate/request", a.deletePushRequest)
 		r.With(admin).Post("/settings/push-certificate/request/decrypt", a.decryptPushRequest)
+		r.With(admin).Post("/settings/push-certificate/vendor-sign", a.postVendorSign)
+		r.With(admin).Get("/settings/vendor-certificate", a.getVendorCertificate)
+		r.With(admin).Put("/settings/vendor-certificate", a.putVendorCertificate)
+		r.With(admin).Delete("/settings/vendor-certificate", a.deleteVendorCertificate)
 		r.With(admin).Get("/settings/ca.pem", a.getCAPEM)
 
 		r.With(admin).Get("/events", a.listEvents)

@@ -5,19 +5,29 @@ import { useMe } from "../lib/me";
 import { absTime, isZero } from "../lib/format";
 import { Async, Facts, PageHeader, Section, Time } from "../components/ui";
 import { PushCertificate } from "./PushFlow";
+import { VendorManage } from "./VendorCert";
 
 function View({ s, reload }: { s: Settings; reload: () => void }) {
   const me = useMe();
+  const vendor = useLoad(() => api.vendorCertificate(), []);
   return (
     <>
       <Section title="Push certificate (APNs)" id="push-certificate">
         <PushCertificate
+          vendor={vendor}
           push={s.push}
           onChanged={() => {
             reload();
             me.refresh();
           }}
         />
+      </Section>
+
+      <Section title="MDM vendor certificate" id="h-vendor">
+        <p>
+          Signs the push certificate request so that Apple's portal accepts it. It is issued by Apple to the Account Holder of a developer membership, and is only needed when the push certificate is made or renewed.
+        </p>
+        <Async l={vendor} what="Loading the vendor certificate" render={(v) => <VendorManage vendor={v} reload={vendor.reload} addLabel="Add a vendor certificate" />} />
       </Section>
 
       <Section title="Certificate authority" id="h-ca">
