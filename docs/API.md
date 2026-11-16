@@ -27,16 +27,18 @@ protection.
 | | |
 |---|---|
 | `GET /auth/login?next=/path` | starts OIDC; `next` must be a local path |
+
+Sign-in works on both names the server is known by, `admin_url` and `public_url`: the redirect address given to the identity provider is `<the name the request came in on>/auth/callback`, and a request on any other name is refused. The session cookie belongs to the name it was set on.
 | `GET /auth/callback` | finishes it, sets the session cookie, redirects to `next` |
 | `POST /auth/logout` | ends the session; 204 |
 
-## Device-facing (no session)
+## Device-facing (no session, except the enrolment link)
 
 | | |
 |---|---|
 | `PUT /mdm` | MDM check-in and commands (signed by the device) |
 | `GET, POST /scep` | SCEP |
-| `GET /enroll/{token}` | the signed enrolment profile for that enrolment, as `application/x-apple-aspen-config`, once; 404 if unknown or expired, 410 if already downloaded |
+| `GET /enroll/{token}` | needs a session like any page (not signed in: redirect to `/auth/login?next=/enroll/{token}`), so even an invited person signs in first. Then: the signed enrolment profile for that enrolment, as `application/x-apple-aspen-config`, once. 404 if unknown or expired; 403 (a short plain-text page) if the person signed in is neither the one the enrolment is for nor an admin; 410 if already downloaded |
 | `GET /healthz` | `{"status":"ok"}`; 503 with `{"status":"degraded","problems":[...]}` if the secret store cannot be reached |
 
 ## `/api/v1`
@@ -77,7 +79,7 @@ Setting or deleting a secret triggers a reconcile of the devices it affects.
 - `POST /devices/{id}/sync` → 204: reconcile now and wake the device
 - `POST /devices/{id}/lock` with `{"pin": "123456", "message": "..."}` → `{"command_uuid": "..."}`. `pin` is required for a Mac (six digits) and ignored otherwise.
 - `POST /devices/{id}/erase` with `{"confirm": "<the device's serial number>"}` (admin) → `{"command_uuid": "..."}`; 400 if the serial number does not match
-- `DELETE /devices/{id}` (admin) → 204: removes the MDM profile from the device if it can still be reached (which removes everything OpenMDM installed) and forgets it
+- `DELETE /devices/{id}` (admin) → 204: removes the MDM profile from the device if it can still be reached (which removes everything OpenMDM installed) and forgets it, and revokes the identity certificate it enrolled with so that it cannot check in again
 
 ### Profiles
 
@@ -98,6 +100,15 @@ Changing or deleting a profile triggers a reconcile of every device.
 
 - `GET /settings` → `{"push": PushInfo, "ca": {"subject": "...", "not_after": "...", "sha256": "..."}, "secrets": {"backend": "openbao", "healthy": true, "error": ""}, "public_url": "...", "organization": "..."}`
 - `PUT /settings/push-certificate` with `{"certificate_pem": "...", "key_pem": "..."}` → `{"push": PushInfo}`; 400 if they do not match or the certificate is not an MDM push certificate
+- `PUT /settings/push-certificate` with only `{"certificate_pem": "..."}` when a request (below) is pending: the certificate is paired with the key made for that request, and the request is then cleared. 400 if they do not match.
+
+Getting a push certificate from Apple needs a request countersigned by an MDM vendor; Apple's portal does not take a plain CSR. OpenMDM uses the free signing service mdmcert.download for that, in three steps:
+
+- `POST /settings/push-certificate/request` with `{"email": "you@your-company.example"}` → `{"request": {"pending": true, "email": "...", "requested_at": "..."}}`. Makes a new private key and CSR and a one-off encryption certificate, keeps the keys sealed in the database, and sends the CSR, the encryption certificate and the email address to `https://mdmcert.download/api/v1/signrequest`. The service emails a file to that address. 502 with the service's message if it refuses (it does not accept free-mail addresses). A new request replaces a pending one.
+- `GET /settings/push-certificate/request` → `{"request": {"pending": false}}` or the pending one as above.
+- `POST /settings/push-certificate/request/decrypt` with `{"encrypted": "<the text of the emailed .p7 file>"}` → `{"filename": "push-certificate-request.plist.b64", "content": "<text>"}`: the countersigned request, to be uploaded at https://identity.apple.com/pushcert. 400 if it cannot be decrypted with the pending request's key. Apple then gives a `.pem`, which goes to `PUT /settings/push-certificate` as `certificate_pem`.
+- `DELETE /settings/push-certificate/request` → 204: forget a pending request.
+
 - `GET /settings/ca.pem` → the CA certificate (PEM)
 
 ### Audit log (admin)
