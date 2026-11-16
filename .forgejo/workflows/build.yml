@@ -1,0 +1,71 @@
+# Tests the server and builds its image, natively for the machine the runner
+# is on (arm64 on an Apple-silicon host), and pushes it to the registry
+# tagged with the commit SHA and, on main, `latest`.
+#
+# Repository secret: REGISTRY_PASSWORD (the registry's `ci` account).
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: cr.willhackett.internal
+  IMAGE_NAME: openmdm
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: cr.willhackett.internal/docker.io/library/golang:1.27-bookworm
+      credentials:
+        username: ci
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
+  image:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: docker
+    container:
+      image: cr.willhackett.internal/docker.io/library/node:24-bookworm
+      credentials:
+        username: ci
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner hands jobs the host's Docker socket; this is the client.
+      - name: Install Docker client
+        run: |
+          . /etc/os-release
+          curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+          echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $VERSION_CODENAME stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends docker-ce-cli docker-buildx-plugin
+
+      - name: Build image
+        run: |
+          set -eu
+          image="$REGISTRY/$GITHUB_REPOSITORY_OWNER/$IMAGE_NAME"
+          docker build --build-arg "VERSION=$(echo "$GITHUB_SHA" | cut -c1-12)" --tag "$image:$GITHUB_SHA" --tag "$image:latest" .
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Push image
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -eu
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username ci --password-stdin
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+          docker logout "$REGISTRY"

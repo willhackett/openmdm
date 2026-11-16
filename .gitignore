@@ -5,5 +5,5 @@ node_modules/
 *.db-*
 .env
 /web/dist/*
-!/web/dist/index.html
+!/web/dist/.keep
 .DS_Store

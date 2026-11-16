@@ -1,0 +1,20 @@
+{
+  "name": "openmdm-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "preact": "10.29.8",
+    "qrcode-generator": "2.0.4"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "7.3.8"
+  }
+}
