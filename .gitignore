@@ -1,0 +1,9 @@
+node_modules/
+/openmdm
+/data/
+*.db
+*.db-*
+.env
+/web/dist/*
+!/web/dist/index.html
+.DS_Store
