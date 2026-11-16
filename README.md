@@ -30,6 +30,10 @@ the MDM protocol itself.
 Not in it: automatic enrolment through Apple Business Manager, installing
 apps, enforcing OS updates, software inventory.
 
+Development happens on a private Forgejo; this repository and that one are
+kept in step in both directions (`.forgejo/workflows/github-sync.yml`), so
+pull requests here are welcome.
+
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the parts and how they meet
 - [docs/PROFILES.md](docs/PROFILES.md): writing a profile
 - [docs/API.md](docs/API.md): the HTTP API
