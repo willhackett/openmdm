@@ -102,9 +102,16 @@ Changing or deleting a profile triggers a reconcile of every device.
 - `PUT /settings/push-certificate` with `{"certificate_pem": "...", "key_pem": "..."}` → `{"push": PushInfo}`; 400 if they do not match or the certificate is not an MDM push certificate
 - `PUT /settings/push-certificate` with only `{"certificate_pem": "..."}` when a request (below) is pending: the certificate is paired with the key made for that request, and the request is then cleared. 400 if they do not match.
 
-Getting a push certificate from Apple needs a request countersigned by an MDM vendor; Apple's portal does not take a plain CSR. OpenMDM uses the free signing service mdmcert.download for that, in three steps:
+A push certificate starts with a certificate signing request (CSR) for a key that never leaves the server:
 
-- `POST /settings/push-certificate/request` with `{"email": "you@your-company.example"}` → `{"request": {"pending": true, "email": "...", "requested_at": "..."}}`. Makes a new private key and CSR and a one-off encryption certificate, keeps the keys sealed in the database, and sends the CSR, the encryption certificate and the email address to `https://mdmcert.download/api/v1/signrequest`. The service emails a file to that address. 502 with the service's message if it refuses (it does not accept free-mail addresses). A new request replaces a pending one.
+- `POST /settings/push-certificate/csr` → `{"filename": "openmdm-push.csr", "csr_pem": "-----BEGIN CERTIFICATE REQUEST-----…", "request": {"pending": true, "requested_at": "…", "email": ""}}`. Makes a new private key (kept sealed in the database) and its CSR, replacing any pending one. No network call. This is also how the certificate is renewed each year: a new CSR, a new key, the same Apple ID at Apple's portal.
+- `GET /settings/push-certificate/csr` → the pending CSR again, same shape; 404 if none is pending.
+
+The resulting certificate, however it was obtained, goes to `PUT /settings/push-certificate` as `certificate_pem`.
+
+Apple's portal (https://identity.apple.com/pushcert) is documented as taking only a request countersigned by an MDM vendor, not a plain CSR. For that, OpenMDM can use the free signing service mdmcert.download, in three steps:
+
+- `POST /settings/push-certificate/request` with `{"email": "you@your-company.example"}` → `{"request": {"pending": true, "email": "...", "requested_at": "..."}}`. Uses the pending CSR (making a key and CSR first if none is pending), makes a one-off encryption certificate, keeps the keys sealed in the database, and sends the CSR, the encryption certificate and the email address to `https://mdmcert.download/api/v1/signrequest`. The service emails a file to that address. 502 with the service's message if it refuses (it does not accept free-mail addresses); the pending key and CSR are kept, so it can be tried again or the CSR used another way.
 - `GET /settings/push-certificate/request` → `{"request": {"pending": false}}` or the pending one as above.
 - `POST /settings/push-certificate/request/decrypt` with `{"encrypted": "<the text of the emailed .p7 file>"}` → `{"filename": "push-certificate-request.plist.b64", "content": "<text>"}`: the countersigned request, to be uploaded at https://identity.apple.com/pushcert. 400 if it cannot be decrypted with the pending request's key. Apple then gives a `.pem`, which goes to `PUT /settings/push-certificate` as `certificate_pem`.
 - `DELETE /settings/push-certificate/request` → 204: forget a pending request.
