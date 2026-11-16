@@ -17,17 +17,6 @@ env:
   IMAGE_NAME: openmdm
 
 jobs:
-  image: cr.willhackett.internal/docker.io/library/golang:1.27-bookworm
-      credentials:
-        username: ci
-        password: ${{ secrets.REGISTRY_PASSWORD }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Test
-        run: |
-          go vet ./...
-          go test -count=1 ./...
-
   image:
     runs-on: docker
     container:
@@ -48,7 +37,8 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends docker-ce-cli docker-buildx-plugin
 
-      - name: Build image
+      # Runs the tests too: the Dockerfile does not build from failing code.
+      - name: Test and build image
         run: |
           set -eu
           image="$REGISTRY/$GITHUB_REPOSITORY_OWNER/$IMAGE_NAME"
