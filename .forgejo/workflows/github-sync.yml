@@ -1,0 +1,91 @@
+# Keeps `main` and the tags the same here and on GitHub, in both directions,
+# without ever overwriting either side.
+#
+# This Forgejo repository is the primary. The copy on GitHub is public, so a
+# change can also arrive there (a merged pull request). Each run compares
+# the two `main` branches:
+#
+#   the same                nothing to do
+#   Forgejo is ahead        push to GitHub
+#   GitHub is ahead         fast-forward Forgejo to it
+#   they have diverged      fail, and say so: someone has to merge by hand
+#
+# Nothing is ever force-pushed, which is why this is a workflow and not a
+# Forgejo push mirror (a mirror makes GitHub an exact copy and would discard
+# what was merged there).
+#
+# Repository variable: GITHUB_REPOSITORY_SSH (git@github.com:owner/repo.git).
+# Repository secret:   GITHUB_DEPLOY_KEY (the private half of a deploy key
+#                      with write access on that GitHub repository).
+name: GitHub sync
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: github-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: ${{ vars.GITHUB_REPOSITORY_SSH != '' }}
+    runs-on: docker
+    container:
+      image: ${{ vars.REGISTRY }}/docker.io/library/node:24-bookworm
+      credentials:
+        username: ci
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync
+        env:
+          GITHUB_DEPLOY_KEY: ${{ secrets.GITHUB_DEPLOY_KEY }}
+          GITHUB_REMOTE: ${{ vars.GITHUB_REPOSITORY_SSH }}
+        run: |
+          set -eu
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$GITHUB_DEPLOY_KEY" > ~/.ssh/github
+          # GitHub's published host key (https://api.github.com/meta).
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/github -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+
+          git remote add github "$GITHUB_REMOTE"
+          git fetch --quiet origin main
+          git fetch --quiet --tags origin
+          ours="$(git rev-parse origin/main)"
+          if git ls-remote --exit-code --heads github main >/dev/null 2>&1; then
+            git fetch --quiet github main
+            theirs="$(git rev-parse FETCH_HEAD)"
+          else
+            theirs=""   # an empty repository on GitHub
+          fi
+
+          if [ "$ours" = "$theirs" ]; then
+            echo "main is the same on both"
+          elif [ -z "$theirs" ] || git merge-base --is-ancestor "$theirs" "$ours"; then
+            echo "Forgejo is ahead: pushing main to GitHub"
+            git push github "$ours:refs/heads/main"
+          elif git merge-base --is-ancestor "$ours" "$theirs"; then
+            echo "GitHub is ahead: fast-forwarding Forgejo"
+            git push origin "$theirs:refs/heads/main"
+          else
+            echo "main has diverged: Forgejo is at $ours, GitHub at $theirs." >&2
+            echo "Merge GitHub's main into Forgejo's by hand and push to Forgejo." >&2
+            exit 1
+          fi
+
+          # Tags in both directions; a tag that differs between the two is
+          # reported by git and left alone.
+          git push github --tags
+          git fetch --quiet github "refs/tags/*:refs/tags/*" || true
+          git push origin --tags

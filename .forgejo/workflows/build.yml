@@ -3,6 +3,7 @@
 # is on (arm64 on an Apple-silicon host), and pushes it to the registry
 # tagged with the commit SHA and, on main, `latest`.
 #
+# Repository variable: REGISTRY (the registry's host name).
 # Repository secret: REGISTRY_PASSWORD (the registry's `ci` account).
 name: Build
 
@@ -13,14 +14,16 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: cr.willhackett.internal
+  # The container registry images are pushed to, and pulled through (it
+  # caches Docker Hub): the repository variable REGISTRY.
+  REGISTRY: ${{ vars.REGISTRY }}
   IMAGE_NAME: openmdm
 
 jobs:
   image:
     runs-on: docker
     container:
-      image: cr.willhackett.internal/docker.io/library/node:24-bookworm
+      image: ${{ vars.REGISTRY }}/docker.io/library/node:24-bookworm
       credentials:
         username: ci
         password: ${{ secrets.REGISTRY_PASSWORD }}
