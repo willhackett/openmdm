@@ -13,6 +13,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist ./web/dist
+# The image is not built from code that fails its tests.
+RUN go vet ./... && go test -count=1 ./...
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /openmdm ./cmd/openmdm
 

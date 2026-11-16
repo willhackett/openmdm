@@ -1,4 +1,5 @@
-# Tests the server and builds its image, natively for the machine the runner
+# Tests the server (inside the image build: see the Dockerfile) and builds
+# its image, natively for the machine the runner
 # is on (arm64 on an Apple-silicon host), and pushes it to the registry
 # tagged with the commit SHA and, on main, `latest`.
 #
@@ -16,10 +17,7 @@ env:
   IMAGE_NAME: openmdm
 
 jobs:
-  test:
-    runs-on: docker
-    container:
-      image: cr.willhackett.internal/docker.io/library/golang:1.27-bookworm
+  image: cr.willhackett.internal/docker.io/library/golang:1.27-bookworm
       credentials:
         username: ci
         password: ${{ secrets.REGISTRY_PASSWORD }}
@@ -31,8 +29,6 @@ jobs:
           go test -count=1 ./...
 
   image:
-    needs: test
-    if: github.event_name != 'pull_request'
     runs-on: docker
     container:
       image: cr.willhackett.internal/docker.io/library/node:24-bookworm
@@ -60,6 +56,7 @@ jobs:
           echo "IMAGE=$image" >> "$GITHUB_ENV"
 
       - name: Push image
+        if: github.event_name != 'pull_request'
         env:
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
