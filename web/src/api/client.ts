@@ -81,7 +81,13 @@ export const realApi: Api = {
   enrollments: async () => (await request<{ enrollments: never[] }>("GET", "/enrollments")).enrollments,
   settings: () => request("GET", "/settings"),
   setPushCertificate: async (certificate_pem, key_pem) =>
-    (await request<{ push: never }>("PUT", "/settings/push-certificate", { certificate_pem, key_pem })).push,
+    (await request<{ push: never }>("PUT", "/settings/push-certificate", key_pem ? { certificate_pem, key_pem } : { certificate_pem })).push,
+  generatePushCsr: () => request("POST", "/settings/push-certificate/csr"),
+  pushCsr: () => request("GET", "/settings/push-certificate/csr"),
+  pushRequest: async () => (await request<{ request: never }>("GET", "/settings/push-certificate/request")).request,
+  requestPushCertificate: async (email) => (await request<{ request: never }>("POST", "/settings/push-certificate/request", { email })).request,
+  decryptPushRequest: (encrypted) => request("POST", "/settings/push-certificate/request/decrypt", { encrypted }),
+  cancelPushRequest: () => request("DELETE", "/settings/push-certificate/request"),
   events: async (limit = 200) => (await request<{ events: never[] }>("GET", `/events?limit=${limit}`)).events,
   logout: async () => {
     await fetch("/auth/logout", {

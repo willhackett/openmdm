@@ -98,6 +98,19 @@ export interface PushInfo {
   not_after: string;
 }
 
+/** A push certificate request made through mdmcert.download, as GET /settings/push-certificate/request reports it. */
+export interface PushRequest {
+  pending: boolean;
+  email?: string;
+  requested_at?: string;
+}
+
+export interface PushCsr {
+  filename: string;
+  csr_pem: string;
+  request: PushRequest;
+}
+
 export interface TemplateInfo {
   identifier: string;
   user_secrets: string[];
@@ -185,7 +198,16 @@ export interface Api {
   createEnrollment(username?: string): Promise<{ enrollment: Enrollment; url: string }>;
   enrollments(): Promise<Enrollment[]>;
   settings(): Promise<Settings>;
-  setPushCertificate(certificatePem: string, keyPem: string): Promise<PushInfo>;
+  /** With no key, the certificate is paired with the key made for the pending request. */
+  setPushCertificate(certificatePem: string, keyPem?: string): Promise<PushInfo>;
+  pushRequest(): Promise<PushRequest>;
+  /** Makes a new key and CSR on the server (replacing a pending one). */
+  generatePushCsr(): Promise<PushCsr>;
+  /** The pending CSR again; rejects with a 404 ApiError when none is pending. */
+  pushCsr(): Promise<PushCsr>;
+  requestPushCertificate(email: string): Promise<PushRequest>;
+  decryptPushRequest(encrypted: string): Promise<{ filename: string; content: string }>;
+  cancelPushRequest(): Promise<void>;
   events(limit?: number): Promise<Event[]>;
   logout(): Promise<void>;
 }

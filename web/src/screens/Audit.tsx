@@ -1,7 +1,7 @@
 import { api } from "../api";
 import { useLoad } from "../lib/hooks";
 import { absTime } from "../lib/format";
-import { Async, Empty, PageHeader, TableWrap, Time } from "../components/ui";
+import { Async, DataTable, Empty, PageHeader, Time } from "../components/ui";
 
 export function AuditScreen() {
   const l = useLoad(() => api.events(200), []);
@@ -19,35 +19,29 @@ export function AuditScreen() {
           events.length === 0 ? (
             <Empty>Nothing has been logged yet.</Empty>
           ) : (
-            <TableWrap label="Audit log">
-              <table class="audit">
-                <thead>
-                  <tr>
-                    <th scope="col">Time</th>
-                    <th scope="col">Actor</th>
-                    <th scope="col">Kind</th>
-                    <th scope="col">Subject</th>
-                    <th scope="col">Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events.map((e) => (
-                    <tr key={e.id}>
-                      <td class="nowrap">
-                        <Time iso={e.at} />
-                        <div class="muted small">{absTime(e.at)}</div>
-                      </td>
-                      <td>{e.actor}</td>
-                      <td>
-                        <code>{e.kind}</code>
-                      </td>
-                      <td class="detail-cell">{e.subject}</td>
-                      <td class="detail-cell">{e.detail || <span class="muted">none</span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableWrap>
+            <DataTable
+              label="Audit log"
+              min={58}
+              rows={events}
+              rowKey={(e) => String(e.id)}
+              cols={[
+                {
+                  head: "Time",
+                  w: "9.5rem",
+                  nowrap: true,
+                  render: (e) => (
+                    <>
+                      <Time iso={e.at} />
+                      <div class="cell-sub">{absTime(e.at)}</div>
+                    </>
+                  ),
+                },
+                { head: "Actor", w: "9rem", render: (e) => e.actor },
+                { head: "Kind", w: "11rem", render: (e) => <code>{e.kind}</code> },
+                { head: "Subject", w: "14rem", render: (e) => e.subject },
+                { head: "Detail", render: (e) => (e.detail ? <span class="cell-detail">{e.detail}</span> : null) },
+              ]}
+            />
           )
         }
       />

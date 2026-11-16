@@ -13,6 +13,8 @@ import type {
   Profile,
   ProfileState,
   PushInfo,
+  PushCsr,
+  PushRequest,
   SecretEntry,
   TemplateInfo,
   User,
@@ -46,7 +48,7 @@ const users: User[] = [
     username: "alex",
     email: "alex@example.com",
     name: "Alex Rivera",
-    groups: ["admins", "family"],
+    groups: ["admins", "family", "design"],
     role: "admin",
     created_at: ago(90 * DAY),
     last_login_at: ago(5 * MIN),
@@ -59,6 +61,33 @@ const users: User[] = [
     role: "user",
     created_at: ago(60 * DAY),
     last_login_at: ago(2 * DAY),
+  },
+  {
+    username: "jordan",
+    email: "jordan.whitcombe-featherstonehaugh@example.com",
+    name: "Jordan Whitcombe-Featherstonehaugh",
+    groups: ["family"],
+    role: "user",
+    created_at: ago(30 * DAY),
+    last_login_at: ago(9 * DAY),
+  },
+  {
+    username: "priya",
+    email: "priya@example.com",
+    name: "Priya Nair",
+    groups: ["design", "contractors"],
+    role: "user",
+    created_at: ago(21 * DAY),
+    last_login_at: ago(4 * HOUR),
+  },
+  {
+    username: "tomasz",
+    email: "tomasz@example.com",
+    name: "Tomasz Kowalczyk",
+    groups: ["contractors"],
+    role: "user",
+    created_at: ago(14 * DAY),
+    last_login_at: ago(1 * DAY),
   },
 ];
 
@@ -114,6 +143,71 @@ const devices: Device[] = [
     user_channel_id: "",
     enrolled_at: ago(39 * DAY),
     last_seen_at: ago(2 * DAY + 4 * HOUR),
+  },
+  {
+    id: "00008130-004F5A6B7C8D9E05",
+    username: "jordan",
+    platform: "macos",
+    serial_number: "C02YJ3RTLVDM",
+    model: "Mac15,7",
+    device_name: "Jordan's MacBook Pro 16-inch (studio, second floor desk)",
+    os_version: "15.1",
+    status: "enrolled",
+    user_channel_id: "",
+    enrolled_at: ago(28 * DAY),
+    last_seen_at: ago(9 * DAY),
+  },
+  {
+    id: "00008140-0050A6B7C8D9E0F6",
+    username: "priya",
+    platform: "ipados",
+    serial_number: "H9QW4N2XKT",
+    model: "iPad14,6",
+    device_name: "Priya's iPad Pro",
+    os_version: "18.0.1",
+    status: "enrolled",
+    user_channel_id: "",
+    enrolled_at: ago(20 * DAY),
+    last_seen_at: ago(40 * MIN),
+  },
+  {
+    id: "00008150-0061B7C8D9E0F107",
+    username: "priya",
+    platform: "ios",
+    serial_number: "J3MZ8P5RVC",
+    model: "iPhone16,1",
+    device_name: "Priya's iPhone",
+    os_version: "18.1",
+    status: "enrolled",
+    user_channel_id: "",
+    enrolled_at: ago(20 * DAY),
+    last_seen_at: ago(6 * HOUR),
+  },
+  {
+    id: "00008160-0072C8D9E0F1A208",
+    username: "tomasz",
+    platform: "macos",
+    serial_number: "C02ZD8LKQ6L4",
+    model: "Mac14,15",
+    device_name: "Studio Mac",
+    os_version: "14.7.1",
+    status: "pending",
+    user_channel_id: "",
+    enrolled_at: ago(13 * DAY),
+    last_seen_at: ago(13 * DAY),
+  },
+  {
+    id: "00008170-0083D9E0F1A2B309",
+    username: "tomasz",
+    platform: "ios",
+    serial_number: "K7TB2Q9WHD",
+    model: "iPhone13,2",
+    device_name: "TK iPhone",
+    os_version: "17.6",
+    status: "enrolled",
+    user_channel_id: "",
+    enrolled_at: ago(13 * DAY),
+    last_seen_at: ago(3 * DAY),
   },
 ];
 
@@ -191,6 +285,29 @@ const fileVaultTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `;
 
+/** A small valid-looking template, for profiles whose content does not matter here. */
+const tpl = (id: string, type: string, extra = "") => `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadIdentifier</key><string>com.example.openmdm.${id}</string>
+  <key>PayloadUUID</key><string>{{ uuid "root" }}</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>${type}</string>
+      <key>PayloadIdentifier</key><string>com.example.openmdm.${id}.payload</string>
+      <key>PayloadUUID</key><string>{{ uuid "payload" }}</string>
+      <key>PayloadVersion</key><integer>1</integer>
+${extra}
+    </dict>
+  </array>
+</dict>
+</plist>
+`;
+
 const profiles: Profile[] = [
   {
     id: "personal-mail",
@@ -225,6 +342,40 @@ const profiles: Profile[] = [
     source: "ui",
     updated_at: ago(6 * DAY),
   },
+  {
+    id: "contractor-restrictions",
+    name: "Restrictions for contractors and other short-term staff on shared devices",
+    description:
+      "Turns off AirDrop, the camera roll upload, iCloud Drive and Siri suggestions on iPhones and iPads, and requires a six-digit passcode that is checked every hour. Reviewed each quarter.",
+    platforms: ["ios", "ipados"],
+    macos_channel: "device",
+    assignment: { everyone: false, users: [], groups: ["contractors"] },
+    template: tpl("contractor-restrictions", "com.apple.applicationaccess", "      <key>allowAirDrop</key><false/>\n      <key>allowCloudDocumentSync</key><false/>"),
+    source: "file",
+    updated_at: ago(45 * DAY),
+  },
+  {
+    id: "corporate-vpn",
+    name: "Corporate VPN",
+    description: "",
+    platforms: ["macos", "ios"],
+    macos_channel: "device",
+    assignment: { everyone: false, users: ["alex", "sam", "jordan", "priya"], groups: ["design"] },
+    template: tpl("corporate-vpn", "com.apple.vpn.managed", '      <key>VPNType</key><string>IKEv2</string>\n      <key>SharedSecret</key><string>{{ secret "vpn_psk" }}</string>'),
+    source: "ui",
+    updated_at: ago(3 * DAY),
+  },
+  {
+    id: "guest-kiosk",
+    name: "Guest kiosk",
+    description: "Single-app mode for the hall iPad",
+    platforms: ["ipados"],
+    macos_channel: "device",
+    assignment: { everyone: false, users: [], groups: [] },
+    template: tpl("guest-kiosk", "com.apple.app.lock", "      <key>App</key><dict><key>Identifier</key><string>com.apple.mobilesafari</string></dict>"),
+    source: "ui",
+    updated_at: ago(2 * HOUR),
+  },
 ];
 
 const deviceProfiles = new Map<string, DeviceProfile>();
@@ -244,8 +395,11 @@ function seedDP(deviceId: string, profileId: string, state: ProfileState, detail
 }
 
 const userSecrets = new Map<string, Set<string>>([
-  ["alex", new Set(["fastmail_app_password"])],
+  ["alex", new Set(["fastmail_app_password", "vpn_psk"])],
   ["sam", new Set()],
+  ["jordan", new Set(["fastmail_app_password"])],
+  ["priya", new Set(["fastmail_app_password", "vpn_psk"])],
+  ["tomasz", new Set()],
 ]);
 const globalSecretKeys = new Set<string>(["wifi_psk"]);
 
@@ -275,6 +429,9 @@ function addEvent(actor: string, kind: string, subject: string, detail = "", ago
 let enrollments: Enrollment[] = [];
 
 let pushOn = true;
+let pushExpiry = ahead(22 * DAY);
+/** A pending CSR; email is empty until it has been sent for countersigning. */
+let pushRequestState: { email: string; requested_at: string } | null = null;
 let viewer = "alex";
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((f) => f());
@@ -411,43 +568,40 @@ function reconcile() {
 }
 
 function seed() {
-  // alex
-  seedDP(devices[0].id, "personal-mail", "installed", "", "user");
-  seedDP(devices[0].id, "home-wifi", "installed");
-  seedDP(devices[0].id, "disk-encryption", "installed");
-  seedDP(devices[1].id, "personal-mail", "installed");
-  seedDP(devices[1].id, "home-wifi", "installed");
-  // sam
-  deviceProfiles.set(dpKey(devices[2].id, "personal-mail"), {
-    device_id: devices[2].id,
-    profile_id: "personal-mail",
-    state: "blocked",
-    channel: "user",
-    identifier: "com.example.openmdm.personal-mail",
-    content_hash: "",
-    command_uuid: "",
-    detail: 'Waiting for secret "fastmail_app_password" (sam)',
-    updated_at: ago(2 * DAY),
+  const long1 =
+    "The device refused the profile: FileVault payload is not allowed because a personal recovery key is already escrowed (MCProfileErrorDomain 4001).";
+  const long2 =
+    "Installation failed: the passcode policy conflicts with a policy already on the device (a payload from another management source requires an alphanumeric passcode). Remove the other policy, then sync again. (MCProfileErrorDomain 4000)";
+  // [device index, profile id] -> state, detail; anything wanted and not listed is installed, or blocked if a secret is missing.
+  const over: Record<string, [ProfileState, string]> = {
+    "2|disk-encryption": ["failed", long1],
+    "6|contractor-restrictions": ["failed", long2],
+    "5|home-wifi": ["pending", ""],
+    "7|corporate-vpn": ["sent", ""],
+    "8|personal-mail": ["pending", ""],
+  };
+  devices.forEach((d, i) => {
+    for (const p of profiles) {
+      if (!wants(p, d).wanted) continue;
+      const miss = missingFor(p, d);
+      const o = over[i + "|" + p.id];
+      const ch = channelFor(p, d);
+      if (miss.length) {
+        deviceProfiles.set(dpKey(d.id, p.id), {
+          device_id: d.id,
+          profile_id: p.id,
+          state: "blocked",
+          channel: ch,
+          identifier: "com.example.openmdm." + p.id,
+          content_hash: "",
+          command_uuid: "",
+          detail: "Waiting for " + miss.join(", ") + (d.username ? ` (${d.username})` : ""),
+          updated_at: ago(2 * DAY),
+        });
+      } else if (o) seedDP(d.id, p.id, o[0], o[1], ch);
+      else seedDP(d.id, p.id, "installed", "", ch);
+    }
   });
-  seedDP(devices[2].id, "home-wifi", "installed");
-  seedDP(
-    devices[2].id,
-    "disk-encryption",
-    "failed",
-    "The device refused the profile: FileVault payload is not allowed because a personal recovery key is already escrowed (MCProfileErrorDomain 4001).",
-  );
-  deviceProfiles.set(dpKey(devices[3].id, "personal-mail"), {
-    device_id: devices[3].id,
-    profile_id: "personal-mail",
-    state: "blocked",
-    channel: "device",
-    identifier: "com.example.openmdm.personal-mail",
-    content_hash: "",
-    command_uuid: "",
-    detail: 'Waiting for secret "fastmail_app_password" (sam)',
-    updated_at: ago(2 * DAY),
-  });
-  seedDP(devices[3].id, "home-wifi", "installed");
 
   const [mac, phone, smac] = [devices[0], devices[1], devices[2]];
   addCommand(mac.id, "InstallProfile", "acknowledged", "", "personal-mail", "user", 30 * DAY);
@@ -609,9 +763,10 @@ export const mockControls: MockControls = {
 
 const pushInfo = (): PushInfo =>
   pushOn
-    ? { configured: true, topic: "com.apple.mgmt.External.7c1e5b2a-3d4f-4a6b-8c9d-0e1f2a3b4c5d", not_after: ahead(22 * DAY) }
+    ? { configured: true, topic: "com.apple.mgmt.External.7c1e5b2a-3d4f-4a6b-8c9d-0e1f2a3b4c5d", not_after: pushExpiry }
     : { configured: false, topic: "", not_after: "0001-01-01T00:00:00Z" };
 
+const fakeCsr = "-----BEGIN CERTIFICATE REQUEST-----\nTW9jayBDU1IgZm9yIHRoZSBPcGVuTURNIGRlbW8uCg==\n-----END CERTIFICATE REQUEST-----\n";
 const fakePem = "-----BEGIN CERTIFICATE-----\nTW9jayBDQSBjZXJ0aWZpY2F0ZSBmb3IgdGhlIE9wZW5NRE0gZGVtby4=\n-----END CERTIFICATE-----\n";
 
 export const mockApi: Api = {
@@ -840,11 +995,58 @@ export const mockApi: Api = {
     await delay(300);
     needAdmin();
     if (!cert.includes("BEGIN CERTIFICATE")) throw new ApiError(400, "The certificate is not a PEM certificate.");
-    if (!key.includes("PRIVATE KEY")) throw new ApiError(400, "The key is not a PEM private key.");
+    if (key === undefined || key === "") {
+      if (!pushRequestState) throw new ApiError(400, "There is no pending request, so there is no key to pair this certificate with. Send a request first, or upload the key as well.");
+      if (cert.includes("MISMATCH")) throw new ApiError(400, "The certificate does not match the key made for the pending request.");
+      pushRequestState = null;
+    } else if (!key.includes("PRIVATE KEY")) throw new ApiError(400, "The key is not a PEM private key.");
     pushOn = true;
+    pushExpiry = ahead(365 * DAY);
     addEvent(me().username, "settings.push_certificate", "apns");
     notify();
     return pushInfo();
+  },
+  async pushRequest(): Promise<PushRequest> {
+    await delay();
+    needAdmin();
+    return pushRequestState ? { pending: true, ...pushRequestState } : { pending: false };
+  },
+  async generatePushCsr(): Promise<PushCsr> {
+    await delay(400);
+    needAdmin();
+    pushRequestState = { email: "", requested_at: ago(0) };
+    addEvent(me().username, "settings.push_csr", "apns");
+    return { filename: "openmdm-push.csr", csr_pem: fakeCsr, request: { pending: true, ...pushRequestState } };
+  },
+  async pushCsr(): Promise<PushCsr> {
+    await delay();
+    needAdmin();
+    if (!pushRequestState) throw new ApiError(404, "No request is pending.");
+    return { filename: "openmdm-push.csr", csr_pem: fakeCsr, request: { pending: true, ...pushRequestState } };
+  },
+  async requestPushCertificate(email): Promise<PushRequest> {
+    await delay(500);
+    needAdmin();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new ApiError(400, "That is not an email address.");
+    if (!pushRequestState) pushRequestState = { email: "", requested_at: ago(0) };
+    if (/@(gmail|googlemail|outlook|hotmail|yahoo|icloud|proton|aol)\./i.test(email))
+      throw new ApiError(502, "mdmcert.download refused the request: free-mail addresses are not accepted. Use an address at your own domain.");
+    // The pending CSR is used (one is made if there is none); a refusal above leaves it pending.
+    pushRequestState = { email, requested_at: pushRequestState?.requested_at ?? ago(0) };
+    addEvent(me().username, "settings.push_request", email);
+    return { pending: true, ...pushRequestState };
+  },
+  async decryptPushRequest(encrypted) {
+    await delay(400);
+    needAdmin();
+    if (!pushRequestState?.email) throw new ApiError(400, "No request has been sent for countersigning.");
+    if (!encrypted.trim() || encrypted.includes("BAD")) throw new ApiError(400, "That cannot be decrypted with the key of the pending request. Is it the file emailed for this request?");
+    return { filename: "push-certificate-request.plist.b64", content: "PD94bWwgdmVyc2lvbj0iMS4wIj8+PHBsaXN0Pk1vY2sgcmVxdWVzdDwvcGxpc3Q+" };
+  },
+  async cancelPushRequest() {
+    await delay();
+    needAdmin();
+    pushRequestState = null;
   },
 
   async events(limit = 200) {

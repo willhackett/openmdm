@@ -4,7 +4,7 @@ import type { Enrollment } from "../api";
 import { Link } from "../lib/router";
 import { useAction, useLoad } from "../lib/hooks";
 import { useMe } from "../lib/me";
-import { Async, CopyButton, Empty, PageHeader, Section, TableWrap, Time } from "../components/ui";
+import { Async, CopyButton, DataTable, Empty, PageHeader, Section, Time } from "../components/ui";
 import { Qr } from "../components/Qr";
 
 const NAME_RE = /^[a-z0-9._-]+$/;
@@ -40,19 +40,19 @@ function Result({ url, enrollment, username }: { url: string; enrollment: Enroll
         </figure>
       </div>
       <div class="instructions">
+        <p class="note">
+          Whoever opens the link is asked to sign in first, and it only works for <strong>{username}</strong> (or an administrator).
+        </p>
         <h3>On an iPhone or iPad</h3>
         <ol>
-          <li>Open the link in Safari, or scan the QR code with the camera.</li>
-          <li>Tap Allow when asked to download a configuration profile.</li>
-          <li>Open Settings. Tap "Profile Downloaded" near the top, then Install, and enter the passcode if asked.</li>
-          <li>Tap Install again and confirm. The device enrols in a minute or so.</li>
+          <li>Open the link in Safari, or scan the QR code, and sign in when asked.</li>
+          <li>Allow the download of the configuration profile.</li>
+          <li>Open Settings, tap Profile Downloaded, and install it.</li>
         </ol>
         <h3>On a Mac</h3>
         <ol>
-          <li>Open the link in Safari on the Mac. The profile downloads.</li>
-          <li>Open System Settings. Choose General, then Device Management (on older macOS: Privacy &amp; Security, then Profiles).</li>
-          <li>Double-click the downloaded profile, choose Install, and enter the Mac's password.</li>
-          <li>Log in to the Mac as the person it is for, so that user profiles such as mail can install.</li>
+          <li>Open the link and sign in when asked. The profile downloads.</li>
+          <li>Open System Settings, then General, then Device Management, and install the profile.</li>
         </ol>
       </div>
     </section>
@@ -78,41 +78,26 @@ function EnrolmentList() {
           list.length === 0 ? (
             <Empty>No enrolments have been made.</Empty>
           ) : (
-            <TableWrap label="Enrolments">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">For</th>
-                    <th scope="col">State</th>
-                    <th scope="col">Made by</th>
-                    <th scope="col">Made</th>
-                    <th scope="col">Expires</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map((e) => {
+            <DataTable
+              label="Enrolments"
+              min={44}
+              rows={list}
+              rowKey={(e) => e.token}
+              cols={[
+                { head: "For", primary: true, render: (e) => <div class="cell-name"><Link href={`/people/${encodeURIComponent(e.username)}`}>{e.username}</Link></div> },
+                {
+                  head: "State",
+                  w: "8.5rem",
+                  render: (e) => {
                     const s = enrollmentState(e);
-                    return (
-                      <tr key={e.token}>
-                        <th scope="row">
-                          <Link href={`/people/${encodeURIComponent(e.username)}`}>{e.username}</Link>
-                        </th>
-                        <td>
-                          <span class={`badge badge-${s.cls}`}>{s.label}</span>
-                        </td>
-                        <td>{e.created_by}</td>
-                        <td>
-                          <Time iso={e.created_at} />
-                        </td>
-                        <td>
-                          <Time iso={e.expires_at} />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </TableWrap>
+                    return <span class={`badge badge-${s.cls}`}>{s.label}</span>;
+                  },
+                },
+                { head: "Made by", w: "9rem", render: (e) => e.created_by },
+                { head: "Made", w: "8.5rem", nowrap: true, render: (e) => <Time iso={e.created_at} /> },
+                { head: "Expires", w: "8.5rem", nowrap: true, render: (e) => <Time iso={e.expires_at} /> },
+              ]}
+            />
           )
         }
       />
@@ -136,7 +121,7 @@ export function EnrolScreen() {
       {!me.push.configured && (
         <div class="banner banner-warn" role="alert">
           <strong>Enrolment will not work yet.</strong> The push certificate has not been set up, so devices cannot be reached after they enrol.{" "}
-          {isAdmin ? <Link href="/settings">Go to Settings</Link> : "Ask an administrator to set it up."}
+          {isAdmin ? <Link href="/settings#push-certificate">Get a push certificate</Link> : "Ask an administrator to set it up."}
         </div>
       )}
       <form

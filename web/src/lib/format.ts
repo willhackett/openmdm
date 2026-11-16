@@ -48,6 +48,8 @@ export function daysUntil(iso: string): number {
 }
 
 export const platformLabel: Record<Platform, string> = { macos: "Mac", ios: "iPhone", ipados: "iPad" };
+/** The order platforms are always listed in. */
+export const platformOrder: Platform[] = ["macos", "ios", "ipados"];
 export const platformName = (p: string) => (platformLabel as Record<string, string>)[p] ?? p;
 
 export const stateLabel: Record<ProfileState, string> = {

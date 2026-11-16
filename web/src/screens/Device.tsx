@@ -1,11 +1,11 @@
 import { useState } from "preact/hooks";
 import { api } from "../api";
-import type { Device, DeviceDetail } from "../api";
+import type { Device, DeviceDetail, PlanEntry } from "../api";
 import { Link, navigate } from "../lib/router";
 import { useAction, useLoad } from "../lib/hooks";
 import { useMe } from "../lib/me";
 import { platformName } from "../lib/format";
-import { Async, CommandBadge, ConfirmDialog, Facts, Modal, PageHeader, Section, StateBadge, StatusBadge, TableWrap, Time, toast } from "../components/ui";
+import { Async, CommandBadge, ConfirmDialog, DataTable, Facts, Modal, PageHeader, Primary, Section, StateBadge, StatusBadge, Time, toast } from "../components/ui";
 
 function OwnerEditor({ device, onDone }: { device: Device; onDone: () => void }) {
   const users = useLoad(() => api.users(), []);
@@ -264,21 +264,28 @@ function View({ d, reload }: { d: DeviceDetail; reload: () => void }) {
         {d.profiles.length === 0 ? (
           <p class="muted">No profile applies to this device.</p>
         ) : (
-          <ul class="plan">
-            {d.profiles.map((p) => (
-              <li key={p.profile_id} class={`plan-item${p.wanted ? "" : " unwanted"}`}>
-                <div class="plan-head">
-                  <strong>{isAdmin ? <Link href={`/profiles/${encodeURIComponent(p.profile_id)}`}>{p.name}</Link> : p.name}</strong>
-                  <StateBadge state={p.state} />
-                  {mac && p.wanted && <span class="tag">{p.channel === "user" ? "User channel" : "Device channel"}</span>}
-                </div>
-                <p class="reason">
-                  {p.wanted ? "Wanted" : "Not wanted"}: {p.reason}
-                </p>
-                {p.detail && <p class={`detail${p.state === "failed" ? " detail-failed" : ""}`}>{p.detail}</p>}
-              </li>
-            ))}
-          </ul>
+          <DataTable
+            label="Profiles on this device"
+            min={50}
+            rows={d.profiles}
+            rowKey={(p) => p.profile_id}
+            rowClass={(p) => (p.wanted ? "" : "row-unwanted")}
+            cols={[
+              {
+                head: "Profile",
+                primary: true,
+                w: "17rem",
+                render: (p) => (
+                  <Primary sub={`${p.wanted ? "Wanted" : "Not wanted"}: ${p.reason}`}>
+                    {isAdmin ? <Link href={`/profiles/${encodeURIComponent(p.profile_id)}`}>{p.name}</Link> : p.name}
+                  </Primary>
+                ),
+              },
+              { head: "State", w: "8.5rem", render: (p) => <StateBadge state={p.state} /> },
+              ...(mac ? [{ head: "Channel", w: "5.5rem", render: (p: PlanEntry) => (p.wanted ? (p.channel === "user" ? "User" : "Device") : null) }] : []),
+              { head: "Detail", render: (p) => (p.detail ? <span class={`cell-detail${p.state === "failed" ? " detail-failed-text" : ""}`}>{p.detail}</span> : null) },
+            ]}
+          />
         )}
       </Section>
 
@@ -286,37 +293,19 @@ function View({ d, reload }: { d: DeviceDetail; reload: () => void }) {
         {d.commands.length === 0 ? (
           <p class="muted">No commands have been sent to this device.</p>
         ) : (
-          <TableWrap label="Recent commands">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Command</th>
-                  <th scope="col">Profile</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Sent</th>
-                  <th scope="col">Error or detail</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.commands.map((c) => (
-                  <tr key={c.uuid}>
-                    <th scope="row">
-                      {c.request_type}
-                      {mac && <span class="muted"> ({c.channel})</span>}
-                    </th>
-                    <td>{c.profile_id || <span class="muted">none</span>}</td>
-                    <td>
-                      <CommandBadge status={c.status} />
-                    </td>
-                    <td>
-                      <Time iso={c.created_at} />
-                    </td>
-                    <td class="detail-cell">{c.detail || <span class="muted">none</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableWrap>
+          <DataTable
+            label="Recent commands"
+            min={52}
+            rows={d.commands}
+            rowKey={(c) => c.uuid}
+            cols={[
+              { head: "Command", primary: true, w: "13rem", render: (c) => <Primary sub={mac ? `${c.channel} channel` : undefined}>{c.request_type}</Primary> },
+              { head: "Profile", w: "11rem", render: (c) => c.profile_id || null },
+              { head: "Status", w: "8.5rem", render: (c) => <CommandBadge status={c.status} /> },
+              { head: "Sent", w: "8rem", nowrap: true, render: (c) => <Time iso={c.created_at} /> },
+              { head: "Error or detail", render: (c) => (c.detail ? <span class="cell-detail">{c.detail}</span> : null) },
+            ]}
+          />
         )}
       </Section>
 

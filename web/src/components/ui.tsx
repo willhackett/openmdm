@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Loaded } from "../lib/hooks";
 import { ApiError } from "../api";
-import { absTime, relTime, stateLabel } from "../lib/format";
-import type { CommandStatus, DeviceStatus, ProfileState } from "../api";
+import { absTime, platformLabel, platformOrder, relTime, stateLabel, stateOrder } from "../lib/format";
+import type { Assignment, CommandStatus, DeviceStatus, Platform, ProfileState } from "../api";
 
 export function Time({ iso }: { iso: string | null | undefined }) {
   if (!iso || iso.startsWith("0001-")) return <span class="muted">never</span>;
@@ -114,6 +114,150 @@ export function TableWrap({ children, label }: { children: ComponentChildren; la
     <div class="table-wrap" role="region" aria-label={label} tabIndex={0}>
       {children}
     </div>
+  );
+}
+
+export interface Col<T> {
+  /** Header text. */
+  head: string;
+  /** Hide the header text visually (for a column of buttons). */
+  srHead?: boolean;
+  /** A CSS width such as "7rem". Leave out for the one column that takes the rest. */
+  w?: string;
+  /** Numerals: right-aligned, tabular. */
+  num?: boolean;
+  /** The row's main cell: it is the title of the card on a phone. */
+  primary?: boolean;
+  nowrap?: boolean;
+  /** Right-align (buttons). */
+  end?: boolean;
+  /** Leave this cell out of the card layout on a phone for this row. */
+  hideCard?: (row: T) => boolean;
+  render: (row: T) => ComponentChildren;
+}
+
+/**
+ * The one table of the app. Columns have deliberate widths (fixed layout), the table has a
+ * minimum width and scrolls inside its own container when the screen is narrower, and on a
+ * phone every row becomes a card whose cells carry their column names.
+ */
+export function DataTable<T>({
+  label,
+  cols,
+  rows,
+  rowKey,
+  min = 44,
+  rowClass,
+}: {
+  label: string;
+  cols: Col<T>[];
+  rows: T[];
+  rowKey: (r: T) => string;
+  /** Minimum table width in rem. */
+  min?: number;
+  rowClass?: (r: T) => string;
+}) {
+  return (
+    <TableWrap label={label}>
+      <table class="dt" style={{ minWidth: `${min}rem` }}>
+        <colgroup>
+          {cols.map((c, i) => (
+            <col key={i} style={c.w ? { width: c.w } : undefined} />
+          ))}
+        </colgroup>
+        <thead>
+          <tr>
+            {cols.map((c, i) => (
+              <th key={i} scope="col" class={`${c.num ? "num" : ""}${c.end ? " end" : ""}`}>
+                {c.srHead ? <span class="sr-only">{c.head}</span> : c.head}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={rowKey(r)} class={rowClass?.(r)}>
+              {cols.map((c, i) => {
+                const v = c.render(r);
+                const empty = v === null || v === undefined || v === false;
+                const cls = `${c.num ? "num " : ""}${c.end ? "end " : ""}${c.nowrap ? "nowrap " : ""}${c.primary ? "primary " : ""}${empty || c.hideCard?.(r) ? "no-card" : ""}`;
+                const content = empty ? <span class="dash" aria-label="none">&ndash;</span> : v;
+                return c.primary ? (
+                  <th key={i} scope="row" class={cls}>
+                    {content}
+                  </th>
+                ) : (
+                  <td key={i} class={cls} data-label={c.srHead ? undefined : c.head}>
+                    {content}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TableWrap>
+  );
+}
+
+/** A name with a quieter line beneath it, for the first column. */
+export function Primary({ children, sub, title }: { children: ComponentChildren; sub?: ComponentChildren; title?: string }) {
+  return (
+    <div class="cell-primary">
+      <div class="cell-name" title={title}>
+        {children}
+      </div>
+      {sub ? <div class="cell-sub">{sub}</div> : null}
+    </div>
+  );
+}
+
+/** Platforms as small labels, always Mac, iPhone, iPad in that order. */
+export function PlatformTags({ platforms }: { platforms: Platform[] }) {
+  const list = platformOrder.filter((p) => platforms.includes(p));
+  return (
+    <span class="chips">
+      {list.map((p) => (
+        <span key={p} class="tag">
+          {platformLabel[p]}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Who a profile is for, on at most two short lines; the title holds all of it. */
+export function Assignees({ a }: { a: Assignment }) {
+  const users = a.users ?? [];
+  const groups = a.groups ?? [];
+  const full = [a.everyone ? "Everyone" : "", users.length ? "People: " + users.join(", ") : "", groups.length ? "Groups: " + groups.join(", ") : ""].filter(Boolean).join("; ");
+  if (!a.everyone && users.length === 0 && groups.length === 0) return <span class="muted">Nobody</span>;
+  const short = (l: string[]) => (l.length <= 2 ? l.join(", ") : `${l.slice(0, 2).join(", ")} +${l.length - 2}`);
+  return (
+    <span class="assignees" title={full}>
+      {a.everyone && <span class="tag tag-strong">Everyone</span>}
+      {users.length > 0 && <span class="clip">{short(users)}</span>}
+      {groups.length > 0 && (
+        <span class="clip">
+          <span class="muted">Group{groups.length > 1 ? "s" : ""}</span> {short(groups)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Non-zero state counts as labelled chips that never break in the middle; most urgent first. */
+export function StateChips({ counts, none = "None" }: { counts: Partial<Record<ProfileState, number>>; none?: string }) {
+  const shown = stateOrder.filter((s) => (counts[s] ?? 0) > 0);
+  if (shown.length === 0) return <span class="muted">{none}</span>;
+  return (
+    <span class="chips">
+      {shown.map((s) => (
+        <span key={s} class={`chip chip-${s}`}>
+          <strong>{counts[s]}</strong> {stateLabel[s].toLowerCase()}
+        </span>
+      ))}
+    </span>
   );
 }
 

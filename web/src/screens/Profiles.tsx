@@ -1,26 +1,47 @@
 import { api } from "../api";
-import type { ProfileCounts } from "../api";
+import type { ProfileCounts, ProfileListItem } from "../api";
 import { Link } from "../lib/router";
 import { useLoad } from "../lib/hooks";
-import { describeAssignment, platformName, stateOrder } from "../lib/format";
-import { Async, Empty, PageHeader, StateBadge, TableWrap } from "../components/ui";
+import { Assignees, Async, DataTable, Empty, PageHeader, PlatformTags, Primary } from "../components/ui";
+import type { Col } from "../components/ui";
 
-export function CountBadges({ counts }: { counts: ProfileCounts }) {
-  const shown = stateOrder.filter((s) => (counts[s] ?? 0) > 0);
-  if (shown.length === 0) return <span class="muted">On no device</span>;
-  return (
-    <span class="count-badges">
-      {shown.map((s) => (
-        <span key={s} class="count">
-          <strong>{counts[s]}</strong> <StateBadge state={s} />
-        </span>
-      ))}
-    </span>
-  );
+/** Pending, sent and being removed all mean "on its way". */
+const inProgress = (c: ProfileCounts) => (c.pending ?? 0) + (c.sent ?? 0) + (c.removing ?? 0);
+
+function Fig({ n, kind }: { n: number; kind?: "failed" | "blocked" }) {
+  return <span class={n === 0 ? "fig fig-zero" : `fig${kind ? " fig-" + kind : ""}`}>{n}</span>;
 }
 
+const cols: Col<ProfileListItem>[] = [
+  {
+    head: "Name",
+    primary: true,
+    render: (p) => (
+      <Primary
+        sub={
+          p.source === "file" || p.description ? (
+            <>
+              {p.source === "file" && <SourceMark source={p.source} />} {p.description}
+            </>
+          ) : undefined
+        }
+        title={p.name}
+      >
+        <Link href={`/profiles/${encodeURIComponent(p.id)}`}>{p.name}</Link>
+      </Primary>
+    ),
+  },
+  { head: "Platforms", w: "10rem", render: (p) => <PlatformTags platforms={p.platforms} /> },
+  { head: "Mac channel", w: "6.5rem", nowrap: true, render: (p) => (p.platforms.includes("macos") ? (p.macos_channel === "user" ? "User" : "Device") : null) },
+  { head: "Assigned to", w: "11rem", render: (p) => <Assignees a={p.assignment} /> },
+  { head: "Failed", w: "4.5rem", num: true, render: (p) => <Fig n={p.counts.failed ?? 0} kind="failed" />, hideCard: (p) => !(p.counts.failed ?? 0) },
+  { head: "Blocked", w: "5rem", num: true, render: (p) => <Fig n={p.counts.blocked ?? 0} kind="blocked" />, hideCard: (p) => !(p.counts.blocked ?? 0) },
+  { head: "In progress", w: "6.5rem", num: true, render: (p) => <Fig n={inProgress(p.counts)} />, hideCard: (p) => !inProgress(p.counts) },
+  { head: "Installed", w: "5.75rem", num: true, render: (p) => <Fig n={p.counts.installed ?? 0} />, hideCard: (p) => !(p.counts.installed ?? 0) },
+];
+
 export function SourceMark({ source }: { source: string }) {
-  return source === "file" ? <span class="tag" title="Loaded from the profiles directory. Change the file to change the profile.">From file, read-only</span> : null;
+  return source === "file" ? <span class="tag" title="Loaded from the profiles directory. Change the file to change the profile.">From file</span> : null;
 }
 
 export function ProfilesScreen() {
@@ -49,58 +70,7 @@ export function ProfilesScreen() {
               </p>
             </Empty>
           ) : (
-            <>
-              <div class="only-wide">
-                <TableWrap label="Profiles">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th scope="col">Name</th>
-                        <th scope="col">Platforms</th>
-                        <th scope="col">Mac channel</th>
-                        <th scope="col">Assigned to</th>
-                        <th scope="col">On devices</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {list.map((p) => (
-                        <tr key={p.id}>
-                          <th scope="row">
-                            <Link href={`/profiles/${encodeURIComponent(p.id)}`}>{p.name}</Link> <SourceMark source={p.source} />
-                            {p.description && <div class="muted small">{p.description}</div>}
-                          </th>
-                          <td>{p.platforms.map(platformName).join(", ")}</td>
-                          <td>{p.platforms.includes("macos") ? (p.macos_channel === "user" ? "User" : "Device") : <span class="muted">Not for Mac</span>}</td>
-                          <td>{describeAssignment(p.assignment)}</td>
-                          <td>
-                            <CountBadges counts={p.counts} />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </TableWrap>
-              </div>
-              <ul class="cards only-narrow">
-                {list.map((p) => (
-                  <li key={p.id} class="card">
-                    <div class="card-title">
-                      <Link href={`/profiles/${encodeURIComponent(p.id)}`}>{p.name}</Link>
-                      <SourceMark source={p.source} />
-                    </div>
-                    {p.description && <p class="muted">{p.description}</p>}
-                    <p>
-                      {p.platforms.map(platformName).join(", ")}
-                      {p.platforms.includes("macos") && ` · Mac channel: ${p.macos_channel === "user" ? "user" : "device"}`}
-                    </p>
-                    <p>Assigned to: {describeAssignment(p.assignment)}</p>
-                    <p>
-                      <CountBadges counts={p.counts} />
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </>
+            <DataTable label="Profiles" cols={cols} rows={list} rowKey={(p) => p.id} min={57} />
           )
         }
       />

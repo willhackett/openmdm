@@ -3,7 +3,7 @@ import { api } from "../api";
 import { Link } from "../lib/router";
 import { pool, useLoad } from "../lib/hooks";
 import { plural, platformName } from "../lib/format";
-import { Async, Empty, Facts, PageHeader, Section, StatusBadge, TableWrap, Time } from "../components/ui";
+import { Async, DataTable, Empty, Facts, PageHeader, Primary, Section, StatusBadge, Time } from "../components/ui";
 import { SecretsPanel } from "../components/SecretsPanel";
 
 export function PeopleScreen() {
@@ -39,7 +39,7 @@ export function PeopleScreen() {
     const n = needed[u];
     if (n === undefined) return <span class="muted">Loading…</span>;
     if (n === "error") return <span class="muted">Not available</span>;
-    return n === 0 ? <span class="muted">None</span> : <span class="summary-bad">{n} to supply</span>;
+    return n === 0 ? <span class="muted">None</span> : <span class="chip chip-pending">{plural(n, "secret")} needed</span>;
   };
 
   return (
@@ -52,52 +52,27 @@ export function PeopleScreen() {
           if (users.length === 0) return <Empty>No one has signed in yet.</Empty>;
           const count = (u: string) => devices.filter((d) => d.username === u).length;
           return (
-            <>
-              <div class="only-wide">
-                <TableWrap label="People">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th scope="col">Person</th>
-                        <th scope="col">Role</th>
-                        <th scope="col">Devices</th>
-                        <th scope="col">Secrets still needed</th>
-                        <th scope="col">Last sign-in</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.map((u) => (
-                        <tr key={u.username}>
-                          <th scope="row">
-                            <Link href={`/people/${encodeURIComponent(u.username)}`}>{u.name || u.username}</Link>
-                            <div class="muted small">{u.username}</div>
-                          </th>
-                          <td>{u.role === "admin" ? "Administrator" : "User"}</td>
-                          <td>{count(u.username)}</td>
-                          <td>{need(u.username)}</td>
-                          <td>
-                            <Time iso={u.last_login_at} />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </TableWrap>
-              </div>
-              <ul class="cards only-narrow">
-                {users.map((u) => (
-                  <li key={u.username} class="card">
-                    <div class="card-title">
+            <DataTable
+              label="People"
+              min={44}
+              rows={users}
+              rowKey={(u) => u.username}
+              cols={[
+                {
+                  head: "Person",
+                  primary: true,
+                  render: (u) => (
+                    <Primary sub={u.username}>
                       <Link href={`/people/${encodeURIComponent(u.username)}`}>{u.name || u.username}</Link>
-                      <span class="tag">{u.role === "admin" ? "Administrator" : "User"}</span>
-                    </div>
-                    <p class="muted">{u.username}</p>
-                    <p>{plural(count(u.username), "device")}</p>
-                    <p>Secrets still needed: {need(u.username)}</p>
-                  </li>
-                ))}
-              </ul>
-            </>
+                    </Primary>
+                  ),
+                },
+                { head: "Role", w: "8rem", render: (u) => (u.role === "admin" ? "Administrator" : "User") },
+                { head: "Devices", w: "5.5rem", num: true, render: (u) => count(u.username) },
+                { head: "Secrets", w: "10rem", render: (u) => need(u.username) },
+                { head: "Last sign-in", w: "8.5rem", nowrap: true, render: (u) => <Time iso={u.last_login_at} /> },
+              ]}
+            />
           );
         }}
       />

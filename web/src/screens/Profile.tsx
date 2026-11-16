@@ -3,9 +3,51 @@ import { api } from "../api";
 import type { ProfileDetail } from "../api";
 import { Link, navigate } from "../lib/router";
 import { useAction, useLoad } from "../lib/hooks";
-import { describeAssignment, platformName } from "../lib/format";
-import { Async, ConfirmDialog, Facts, PageHeader, Section, StateBadge, TableWrap, Time, toast } from "../components/ui";
+import { describeAssignment } from "../lib/format";
+import { Async, ConfirmDialog, CopyButton, DataTable, Facts, PageHeader, PlatformTags, Primary, Section, StateBadge, Time, toast } from "../components/ui";
+import type { Col } from "../components/ui";
 import { SourceMark } from "./Profiles";
+
+type Row = ProfileDetail["devices"][number];
+
+const deviceCols: Col<Row>[] = [
+  {
+    head: "Device",
+    primary: true,
+    w: "15rem",
+    render: ({ device }) => (
+      <Primary sub={`${device.model} · ${device.os_version}`} title={device.device_name}>
+        <Link href={`/devices/${encodeURIComponent(device.id)}`}>{device.device_name || device.serial_number}</Link>
+      </Primary>
+    ),
+  },
+  { head: "Owner", w: "7rem", render: ({ device }) => (device.username ? <Link href={`/people/${encodeURIComponent(device.username)}`}>{device.username}</Link> : <span class="muted">No owner</span>) },
+  { head: "State", w: "8rem", render: ({ state }) => <StateBadge state={state.state} /> },
+  { head: "Channel", w: "5.5rem", render: ({ device, state }) => (device.platform === "macos" ? (state.channel === "user" ? "User" : "Device") : null) },
+  { head: "Detail", render: ({ state }) => (state.detail ? <span class="cell-detail">{state.detail}</span> : null) },
+  { head: "Updated", w: "7.5rem", nowrap: true, render: ({ state }) => <Time iso={state.updated_at} /> },
+];
+
+function TemplateView({ text }: { text: string }) {
+  const lines = text.replace(/\n$/, "").split("\n");
+  return (
+    <div class="tpl">
+      <div class="tpl-bar">
+        <span class="muted small">{lines.length} lines</span>
+        <CopyButton text={text} label="Copy template" />
+      </div>
+      <pre class="tpl-code" tabIndex={0} aria-label="Profile template">
+        <code>
+          {lines.map((l, i) => (
+            <span key={i} class="ln">
+              {l || " "}
+            </span>
+          ))}
+        </code>
+      </pre>
+    </div>
+  );
+}
 
 function View({ d }: { d: ProfileDetail }) {
   const { profile: p, info } = d;
@@ -36,7 +78,7 @@ function View({ d }: { d: ProfileDetail }) {
         <Facts
           items={[
             ["ID", <code>{p.id}</code>],
-            ["Platforms", p.platforms.map(platformName).join(", ")],
+            ["Platforms", <PlatformTags platforms={p.platforms} />],
             ["Mac channel", p.platforms.includes("macos") ? (p.macos_channel === "user" ? "User channel" : "Device channel") : "Not for Mac"],
             ["Assigned to", describeAssignment(p.assignment)],
             ["Source", p.source === "file" ? "A file in the profiles directory (read-only)" : "Made in this UI"],
@@ -63,45 +105,12 @@ function View({ d }: { d: ProfileDetail }) {
         {d.devices.length === 0 ? (
           <p class="muted">This profile is not on any device.</p>
         ) : (
-          <TableWrap label="Profile state per device">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Device</th>
-                  <th scope="col">Owner</th>
-                  <th scope="col">State</th>
-                  <th scope="col">Channel</th>
-                  <th scope="col">Detail</th>
-                  <th scope="col">Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.devices.map(({ device, state }) => (
-                  <tr key={device.id}>
-                    <th scope="row">
-                      <Link href={`/devices/${encodeURIComponent(device.id)}`}>{device.device_name || device.serial_number}</Link>
-                    </th>
-                    <td>{device.username ? <Link href={`/people/${encodeURIComponent(device.username)}`}>{device.username}</Link> : <span class="muted">No owner</span>}</td>
-                    <td>
-                      <StateBadge state={state.state} />
-                    </td>
-                    <td>{device.platform === "macos" ? (state.channel === "user" ? "User" : "Device") : <span class="muted">Device</span>}</td>
-                    <td class="detail-cell">{state.detail || <span class="muted">none</span>}</td>
-                    <td>
-                      <Time iso={state.updated_at} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableWrap>
+          <DataTable label="Profile state per device" cols={deviceCols} rows={d.devices} rowKey={(r) => r.device.id} min={56} />
         )}
       </Section>
 
       <Section title="Template" id="h-template">
-        <pre class="code" tabIndex={0} aria-label="Profile template">
-          {p.template}
-        </pre>
+        <TemplateView text={p.template} />
       </Section>
 
       {confirm && (

@@ -4,7 +4,8 @@ import type { SecretEntry } from "../api";
 import { Link } from "../lib/router";
 import { useAction, useLoad } from "../lib/hooks";
 import { readFileAsBase64 } from "../lib/format";
-import { Async, ConfirmDialog, Empty, Modal, TableWrap, toast } from "./ui";
+import { useMe } from "../lib/me";
+import { Async, ConfirmDialog, DataTable, Empty, Modal, toast } from "./ui";
 
 export type Scope = { kind: "user"; username: string } | { kind: "global" };
 
@@ -123,12 +124,22 @@ export function SecretsPanel({ scope, canAdd, linkProfiles }: { scope: Scope; ca
   const [setting, setSetting] = useState<string | null>(null); // "" means a new key
   const [deleting, setDeleting] = useState<SecretEntry | null>(null);
   const del = useAction();
+  const { me } = useMe();
+  // Profile ids are what the API gives; an administrator can see their names.
+  const names = useLoad(async () => (linkProfiles ? Object.fromEntries((await api.profiles()).map((p) => [p.id, p.name])) : {}), [linkProfiles]);
+  const nameOf = (id: string) => (names.data as Record<string, string> | null)?.[id] ?? id;
+  const whose = scope.kind === "global" ? "every device whose profiles use it" : scope.username === me.user.username ? "your devices" : "that person's devices";
+  const usedBy = (s: SecretEntry) =>
+    s.used_by.map((p, i) => (
+      <span key={p}>
+        {i > 0 && ", "}
+        {linkProfiles ? <Link href={`/profiles/${encodeURIComponent(p)}`}>{nameOf(p)}</Link> : nameOf(p)}
+      </span>
+    ));
 
   return (
     <div class="secrets">
-      <p class="note">
-        Secret values are stored in OpenBao. You can replace a secret, but its value is never shown again, not even to an administrator.
-      </p>
+      <p class="hint intro">When a value is set, the profiles waiting on it are sent to {whose}. Values are never shown again.</p>
       {canAdd && (
         <p>
           <button type="button" onClick={() => setSetting("")}>
@@ -149,53 +160,49 @@ export function SecretsPanel({ scope, canAdd, linkProfiles }: { scope: Scope; ca
               </Empty>
             );
           return (
-            <TableWrap label="Secrets">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">Key</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Used by</th>
-                    <th scope="col">
-                      <span class="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map((s) => (
-                    <tr key={s.key} class={s.set ? "" : "row-needed"}>
-                      <th scope="row">
-                        <code>{s.key}</code>
-                      </th>
-                      <td>{s.set ? <span class="badge badge-installed">Set</span> : <span class="badge badge-blocked">Needed, not set</span>}</td>
-                      <td>
-                        {s.used_by.length === 0 ? (
-                          <span class="muted">No profile</span>
-                        ) : (
-                          s.used_by.map((p, i) => (
-                            <span key={p}>
-                              {i > 0 && ", "}
-                              {linkProfiles ? <Link href={`/profiles/${encodeURIComponent(p)}`}>{p}</Link> : p}
-                            </span>
-                          ))
-                        )}
-                      </td>
-                      <td class="row-actions">
-                        <button type="button" class={s.set ? "" : "primary"} onClick={() => setSetting(s.key)}>
-                          {s.set ? "Replace" : "Set"}
-                          <span class="sr-only"> {s.key}</span>
+            <DataTable
+              label="Secrets"
+              min={40}
+              rows={sorted}
+              rowKey={(s) => s.key}
+              rowClass={(s) => (s.set ? "" : "row-needed")}
+              cols={[
+                { head: "Key", primary: true, w: "14rem", render: (s) => <div class="cell-name"><code>{s.key}</code></div> },
+                {
+                  head: "Status",
+                  render: (s) =>
+                    s.set ? (
+                      <>
+                        <span class="status-set">Set</span>
+                        {s.used_by.length > 0 && <div class="cell-sub">Used by {usedBy(s)}</div>}
+                      </>
+                    ) : (
+                      <span class="status-needed">
+                        {s.used_by.length > 0 ? <>Needed by {usedBy(s)}</> : "Not used by a profile"} <span class="muted">&middot; not set yet</span>
+                      </span>
+                    ),
+                },
+                {
+                  head: "Actions",
+                  srHead: true,
+                  end: true,
+                  w: "11.5rem",
+                  render: (s) => (
+                    <span class="row-actions">
+                      <button type="button" class={s.set ? "" : "primary"} onClick={() => setSetting(s.key)}>
+                        {s.set ? "Replace" : "Set"}
+                        <span class="sr-only"> {s.key}</span>
+                      </button>
+                      {s.set && (
+                        <button type="button" class="danger" onClick={() => setDeleting(s)}>
+                          Delete<span class="sr-only"> {s.key}</span>
                         </button>
-                        {s.set && (
-                          <button type="button" class="danger" onClick={() => setDeleting(s)}>
-                            Delete<span class="sr-only"> {s.key}</span>
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableWrap>
+                      )}
+                    </span>
+                  ),
+                },
+              ]}
+            />
           );
         }}
       />
@@ -226,7 +233,7 @@ export function SecretsPanel({ scope, canAdd, linkProfiles }: { scope: Scope; ca
         >
           <p>
             Any profile that uses <code>{deleting.key}</code>
-            {deleting.used_by.length ? ` (${deleting.used_by.join(", ")})` : ""} will be blocked on the devices it reaches until a new value is set.
+            {deleting.used_by.length ? ` (${deleting.used_by.map(nameOf).join(", ")})` : ""} will be blocked on the devices it reaches until a new value is set.
           </p>
         </ConfirmDialog>
       )}
